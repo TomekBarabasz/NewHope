@@ -1,0 +1,210 @@
+package org.newhope.i2c
+
+import spinal.core._
+import spinal.core.sim._
+import spinal.lib.sim._
+import org.scalatest.funsuite.AnyFunSuite
+import scala.collection.mutable
+
+// =====================================================================
+//  1. MODEL MAGISTRALI (wired-AND + programowy "slave")
+//
+//  Alternatywa z biblioteki: spinal.lib.com.i2c.sim.OpenDrainInterconnect
+//  (addHard / newSoftConnection / evaluate). Tutaj recznie, zeby bylo
+//  widac co sie dzieje i zeby dalo sie wstrzykiwac bledy.
+// =====================================================================
+class I2cBusModel(dut : I2cPhyBase) {
+
+  // Programowe sciaganie linii do masy - to jest nasz "slave".
+  var sclPull = false
+  var sdaPull = false
+
+  def scl : Boolean = dut.io.pins.scl.write.toBoolean && !sclPull
+  def sda : Boolean = dut.io.pins.sda.write.toBoolean && !sdaPull
+
+  def start() : Unit = dut.clockDomain.onSamplings {
+    dut.io.pins.scl.read #= scl
+    dut.io.pins.sda.read #= sda
+  }
+
+  // Clock stretching: przytrzymaj SCL przez n cykli zegara systemowego.
+  def stretch(cycles : Int) : Unit = {
+    sclPull = true
+    dut.clockDomain.waitSampling(cycles)
+    sclPull = false
+  }
+}
+
+// =====================================================================
+//  2. MONITOR / CHECKER PROTOKOLU
+//
+//  Dekoduje piny na zdarzenia i po drodze sprawdza dwa niezmienniki I2C:
+//   - bit jest wazny na zboczu narastajacym SCL,
+//   - SDA nie moze sie zmienic przy wysokim SCL, chyba ze to START/STOP.
+// =====================================================================
+object I2cEvent {
+  sealed trait Event
+  case object Start            extends Event
+  case object Stop             extends Event
+  case class  Bit(v : Boolean) extends Event
+}
+
+class I2cMonitor(dut : I2cPhyBase, bus : I2cBusModel) {
+  import I2cEvent._
+
+  val events = mutable.Queue[Event]()
+
+  private var sclOld  = true
+  private var sdaOld  = true
+  private var bitAtRise = true
+  private var inHigh  = false
+
+  // Ile cykli trwal ostatni stan wysoki / niski SCL - do kontroli timingu.
+  private var lastEdge = 0L
+  var highLen = 0L
+  var lowLen  = 0L
+
+  def start() : Unit = dut.clockDomain.onSamplings {
+    val now = simTime()
+    val scl = bus.scl
+    val sda = bus.sda
+
+    if (scl && sclOld && sda != sdaOld) {
+      // zmiana SDA przy wysokim SCL == warunek START albo STOP
+      events.enqueue(if (sdaOld) Start else Stop)
+      inHigh = false          // po START/STOP nie sprawdzamy juz stabilnosci
+    }
+
+    if (scl && !sclOld) {     // zbocze narastajace: bit staje sie wazny
+      bitAtRise = sda
+      inHigh    = true
+      lowLen    = now - lastEdge
+      lastEdge  = now
+    }
+
+    if (!scl && sclOld) {     // zbocze opadajace: bit sie konczy
+      if (inHigh) {
+        assert(sda == bitAtRise,
+               s"SDA zmienilo sie w trakcie wysokiego SCL (t=$now)")
+        events.enqueue(Bit(bitAtRise))
+      }
+      inHigh   = false
+      highLen  = now - lastEdge
+      lastEdge = now
+    }
+
+    sclOld = scl
+    sdaOld = sda
+  }
+
+  def expect(expected : Event*) : Unit = {
+    val got = events.dequeueAll(_ => true).toSeq
+    assert(got == expected.toSeq, s"oczekiwano ${expected.toSeq}, dostano $got")
+  }
+}
+
+// =====================================================================
+//  3. SUITA - wspolna dla obu implementacji PHY
+// =====================================================================
+abstract class I2cPhySuite(label : String,
+                           build : I2cGenerics => I2cPhyBase) extends AnyFunSuite {
+  import I2cEvent._
+  import I2cPhyCmdMode._
+
+  val g = I2cGenerics(clkFrequency = 100 MHz, sclFrequency = 1 MHz)
+
+  lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
+    .withFstWave
+    .workspaceName(label)
+    .compile { build(g) }
+
+  // --- pomocniki --------------------------------------------------
+  def cmd(d : I2cPhyBase, mode : SpinalEnumElement[I2cPhyCmdMode.type],
+          data : Boolean = true) : Unit = {
+    d.io.cmd.valid        #= true
+    d.io.cmd.payload.mode #= mode
+    d.io.cmd.payload.data #= data
+    d.clockDomain.waitSamplingWhere(d.io.cmd.ready.toBoolean)
+    d.io.cmd.valid #= false
+  }
+
+  def setup(d : I2cPhyBase) : (I2cBusModel, I2cMonitor) = {
+    val bus = new I2cBusModel(d)
+    val mon = new I2cMonitor(d, bus)
+    d.io.cmd.valid #= false
+    d.io.pins.scl.read #= true
+    d.io.pins.sda.read #= true
+    d.clockDomain.forkStimulus(period = 10)
+    bus.start()
+    mon.start()
+    d.clockDomain.waitSampling(5)
+    (bus, mon)
+  }
+
+  // --- testy ------------------------------------------------------
+  test("START i STOP daja warunki na magistrali") {
+    dut.doSim(s"${label}_startStop", seed = 42) { d =>
+      val (_, mon) = setup(d)
+      cmd(d, START)
+      cmd(d, STOP)
+      d.clockDomain.waitSampling(20)
+      mon.expect(Start, Stop)
+    }
+  }
+
+  test("zapis bajtu 0xA5 wychodzi bit po bicie, MSB first") {
+    dut.doSim(s"${label}_writeByte", seed = 42) { d =>
+      val (_, mon) = setup(d)
+      val byte = 0xA5
+      cmd(d, START)
+      for (i <- 7 downto 0) cmd(d, BIT, ((byte >> i) & 1) != 0)
+      cmd(d, STOP)
+      d.clockDomain.waitSampling(20)
+      val expected = Start +: (7 downto 0).map(i => Bit(((byte >> i) & 1) != 0)) :+ Stop
+      mon.expect(expected : _*)
+    }
+  }
+
+  test("odczyt: slave sciaga SDA, rsp.data pokazuje zero") {
+    dut.doSim(s"${label}_readBit", seed = 42) { d =>
+      val (bus, _) = setup(d)
+      val seen = mutable.Queue[Boolean]()
+      FlowMonitor(d.io.rsp, d.clockDomain) { p => seen.enqueue(p.data.toBoolean) }
+
+      cmd(d, START)
+      bus.sdaPull = true          // slave odpowiada zerem
+      cmd(d, BIT, data = true)    // master puszcza linie
+      bus.sdaPull = false
+      cmd(d, BIT, data = true)    // slave puscil, powinno byc jeden
+      cmd(d, STOP)
+      d.clockDomain.waitSampling(20)
+
+      assert(seen.toSeq == Seq(false, true), s"rsp = ${seen.toSeq}")
+    }
+  }
+
+  test("clock stretching wydluza bit zamiast go gubic") {
+    dut.doSim(s"${label}_stretch", seed = 42) { d =>
+      val (bus, mon) = setup(d)
+      cmd(d, START)
+
+      // slave trzyma SCL nisko przez 3 cwiartki po tym jak master ja puscil
+      fork {
+        d.clockDomain.waitSamplingWhere(!d.io.pins.scl.write.toBoolean)
+        d.clockDomain.waitSamplingWhere(d.io.pins.scl.write.toBoolean)
+        bus.stretch(3 * g.quarterCycles)
+      }
+
+      cmd(d, BIT, data = false)
+      cmd(d, STOP)
+      d.clockDomain.waitSampling(20)
+
+      mon.expect(Start, Bit(false), Stop)
+      assert(mon.highLen >= g.quarterCycles * 2 * 10,
+             s"stan wysoki SCL za krotki: ${mon.highLen}")
+    }
+  }
+}
+
+class I2cPhyFsmTest   extends I2cPhySuite("fsm",   g => I2cPhyFsm(g))
+class I2cPhyTableTest extends I2cPhySuite("table", g => I2cPhyTable(g))

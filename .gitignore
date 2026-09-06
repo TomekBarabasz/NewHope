@@ -1,0 +1,8 @@
+target/
+*/target/
+project/target/
+project/project/
+*/hw/gen/
+simWorkspace/
+*/simWorkspace/
+.spinal-sbt/
