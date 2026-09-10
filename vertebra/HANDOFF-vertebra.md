@@ -9,28 +9,7 @@
 ---
 
 ## 1. Nazwa
-
-**Rekomendacja: `vertebra`.**
-
-Uzasadnienie: kręg jest elementem kręgosłupa, więc nazwa siedzi w rodzinie
-SpinalHDL bez podszywania się pod nią. Jest krótka, wymawialna w obu językach,
-wolna w Mavenie i na GitHubie (sprawdzić przed decyzją), a `import vertebra._`
-czyta się dobrze. Dodatkowy bonus: „vert" jako skrót od *verification* to
-przypadek, ale przyjemny.
-
-Alternatywy warte rozważenia:
-
-| nazwa | za | przeciw |
-|---|---|---|
-| `reflex` | łuk odruchowy to dosłownie bodziec → odpowiedź bez udziału mózgu, czyli definicja testbenchu | zajęte w ekosystemie Haskella (Reflex FRP), mylące w wyszukiwarce |
-| `myelin` | osłonka otaczająca nerw — testbench otacza DUT | mniej oczywiste, trudniejsze w wymowie |
-| `proprio` | propriocepcja to zmysł, którym ciało wie o własnym stanie; idealna metafora self-checking | długie, pretensjonalne |
-| `plexus` | splot nerwowy, sieć połączeń | generyczne, dużo kolizji |
-
-**Odradzam `SpinalTitan`.** Trzy powody. Sugeruje afiliację z lowRISC, której
-nie ma. Sugeruje, że to port OpenTitana, a właśnie ustaliliśmy, że to ma być
-inspiracja, nie kopia. I zestarzeje się źle, gdy projekt odejdzie od
-oryginalnego wzorca — a odejdzie, bo musi.
+`vertebra`
 
 ---
 
