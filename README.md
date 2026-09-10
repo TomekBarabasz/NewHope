@@ -18,6 +18,43 @@ sbt  testOnly *AsyncFifoDemoTest
 sbt  runMain I2CExample.CdcInjectDemoSim //to jest App a nie AnyFunSuite
 ```
 
+# Komendy sbt
+projects
+projects i2c - przejście do modułu
+sbt:i2c> 
+  test
+  compile
+  Test/compile - tylo compilacja testó
+  clen
+project root - powrót
+reload - po każdej edycji build.sbt
+
+wavesOn [default] - włączanie  generacji przebiegów
+wavesOff          - wyłączanie generacji przebiegów
+
+i2c/test - uruchomienie testów dla modułu i2c
+
+sbt test w korzeniu odpala wszystko przez aggregate. Przy I2cPhyTestplan to 4 configi × 2 implementacje = 8 kompilacji Verilatora, plus fuzzer z 400 przebiegami. Rzadko tego chcesz.
+
+```
+i2c/test                                          <- jeden modul
+i2c/testOnly org.newhope.i2c.I2cPhyFsmTest        <- jedna klasa
+i2c/testOnly *TableTestplan                       <- glob
+i2c/testOnly *Testplan -- -z host_smoke           <- jeden test po nazwie
+i2c/testOnly *Testplan -- -z "fast400k"           <- jeden config
+```
+
+-z to filtr ScalaTest po fragmencie nazwy testu. Skoro twoje testy nazywają się "$cfgName / $name", -z fast400k odpala jeden config zamiast czterech. To jest doraźna odpowiedź na §5.6 handoffu — na tyle dobra, że mechanizm wyboru z linii poleceń może w ogóle nie być potrzebny.
+
+## Ciągłe przebudowywanie przy edycji:
+~i2c/testOnly *I2cPhyFsmTest
+Tylda obserwuje źródła wszystkich modułów, od których zależy i2c — czyli zmiana w vertebrze też przeładuje test I²C. To jest ta rzecz, której nie dałoby osobne repo.
+
+## Generowanie Veriloga per moduł
+Tak, każdy moduł osobno. Twój object I2cPhyVerilog extends App uruchamiasz przez:
+i2c/runMain org.newhope.i2c.I2cPhyVerilog
+runMain z pełną nazwą, bo run przy kilku obiektach z main zapyta interaktywnie albo padnie. Dzięki Compile / run / baseDirectory z hwSettings cwd to katalog modułu, więc targetDirectory = "hw/gen" daje i2c/hw/gen/.
+
 # I2C
 ## I2C Phy
 ## I2C Master
