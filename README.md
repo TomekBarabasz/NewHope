@@ -4,10 +4,21 @@ from learning-hdl/SpinalHDL directory
 docker run --rm -ti -v .:/workspace -w /workspace -v .\.spinal-sbt:/sbt ghcr.io/spinalhdl/docker:master
 ```
 
-```sh
-// To generate the Verilog
-sbt  runMain I2CExample.I2cMasterVerilog
-sbt  runMain I2CExample.AsyncFifoDemoVerilog
+# generate Verilog
+w <module>/hw/spinal/main
+są pliki declarujące uruchamiane obiekty z main do uruomienia np
+`object I2cPhyTableVerilog extends App`
+każdy taki się uruchamia runMain <nazwa-packagea>.<nazwa obiekty> np `org.newhope.i2c.I2cPhyTableVerilog`
+
+# pomiary
+```
+sbt "Test/runMain mylib.i2c.FilterSweep --w 1:4 --out a.csv" &
+sbt "Test/runMain mylib.i2c.FilterSweep --w 5:8 --out b.csv" &
+wait
+sbt "Test/runMain mylib.i2c.FilterSweep --merge a.csv,b.csv --out filter_sweep.csv"
+
+albo 
+sbt "Test/runMain mylib.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
 ```
 
 ```sh
@@ -43,6 +54,12 @@ i2c/testOnly *TableTestplan                       <- glob
 i2c/testOnly *Testplan -- -z host_smoke           <- jeden test po nazwie
 i2c/testOnly *Testplan -- -z "fast400k"           <- jeden config
 ```
+## wybieranie pojedynczych testów
+## test suite musi być konret nie abstract np IcPhyFsm a nie I2cPhySuite
+
+sbt "testOnly *I2cPhyFsmTestplan -- -z \"std100k / host_smoke\""
+
+
 
 -z to filtr ScalaTest po fragmencie nazwy testu. Skoro twoje testy nazywają się "$cfgName / $name", -z fast400k odpala jeden config zamiast czterech. To jest doraźna odpowiedź na §5.6 handoffu — na tyle dobra, że mechanizm wyboru z linii poleceń może w ogóle nie być potrzebny.
 

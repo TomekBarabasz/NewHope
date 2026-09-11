@@ -1,26 +1,22 @@
-package vertebra
+package org.newhope.vertebra
 
 import spinal.core._
 import spinal.core.sim._
 import spinal.lib._
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.mutable
-import scala.util.Random
 
 // =====================================================================
 //  Odpowiednik hw/dv/tools/dvsim/testplans/*.hjson z OpenTitana:
 //  testpointy, ktore dotycza KAZDEGO IP, wyfaktoryzowane raz.
 //
-//  OpenTitan faktoryzuje po CSR / TL-UL / interrupts, bo to jego wspolny
-//  mianownik. Nasz wspolny mianownik to bundle z spinal.lib.
+//  ZMIANA wzgledem poprzedniej wersji: testpoint bierze opcjonalny
+//  wariant. Jedna suita parametryzowana po konfiguracjach generuje
+//  N testow ScalaTest na jeden testpoint planu, a ScalaTest wymaga
+//  unikalnych nazw. Zbior "implemented" jest kluczowany sama nazwa
+//  testpointu, wiec kompletnosc liczy sie tak jak wczesniej.
 // =====================================================================
 
-// ---------------------------------------------------------------------
-//  1. TESTPLAN JAKO DANE
-//
-//  Testplan jest osobnym artefaktem od testow. Piszesz go PRZED kodem,
-//  a testy sie do niego odwoluja. Niezaimplementowane zostaja widoczne.
-// ---------------------------------------------------------------------
 object Stage extends Enumeration {
   val V1, V2, V3 = Value   // V1: smoke + sanity, V2: pelna funkcjonalnosc,
 }                          // V3: stres, losowy reset, przypadki brzegowe
@@ -37,20 +33,25 @@ trait TestplanSuite extends AnyFunSuite {
 
   private val implemented = mutable.Set[String]()
 
-  /** Test realizujacy testpoint z planu. Nazwa musi w nim istniec. */
-  def testpoint(name : String)(body : => Unit) : Unit = {
-    require(testplan.exists(_.name == name),
-            s"'$name' nie ma w testplanie - dopisz go najpierw")
+  private def lookup(name : String) : Testpoint =
+    testplan.find(_.name == name).getOrElse(
+      throw new IllegalArgumentException(s"'$name' nie ma w testplanie - dopisz go najpierw"))
+
+  /** Test realizujacy testpoint z planu. Nazwa musi w nim istniec.
+    * variant rozroznia wielokrotne wykonania tego samego testpointu
+    * (rozne konfiguracje generyka, rozne implementacje DUT-a). */
+  def testpoint(name : String, variant : String = "")(body : => Unit) : Unit = {
+    val tp = lookup(name)
     implemented += name
-    val tp = testplan.find(_.name == name).get
-    test(s"[${tp.stage}] $name") { body }
+    val suffix = if (variant.isEmpty) "" else s" ($variant)"
+    test(s"[${tp.stage}] $name$suffix") { body }
   }
 
   /** Testpoint znany, ale jeszcze nie zrobiony - odpowiednik
-    * "No Tests Implemented" w raporcie OpenTitana. */
+    * "No Tests Implemented" w raporcie OpenTitana. NIE liczy sie do
+    * kompletnosci, celowo: zolty wpis ma bolec. */
   def unimplemented(name : String, reason : String) : Unit = {
-    require(testplan.exists(_.name == name), s"'$name' nie ma w testplanie")
-    val tp = testplan.find(_.name == name).get
+    val tp = lookup(name)
     test(s"[${tp.stage}] $name") {
       info(reason)
       pending
@@ -70,25 +71,24 @@ trait TestplanSuite extends AnyFunSuite {
 }
 
 // ---------------------------------------------------------------------
-//  2. INSTRUMENTACJA
+//  INSTRUMENTACJA
 //
 //  Zeby sprawdzic kontrakt Stream'a z symulacji, trzeba widziec payload
 //  jako jedna wartosc. Robimy to podczas ELABORACJI - to jest ta rzecz,
 //  ktorej SystemVerilog nie umie i dlatego ma `bind`.
+//
+//  OGRANICZENIE: musi byc wywolane wewnatrz komponentu albo w rework.
+//  Dopoki I2cPhy tego nie wola, testpointy StreamConformance nie moga
+//  byc dolaczone do planu I2C - patrz komentarz w I2cPhyTestplan.
 // ---------------------------------------------------------------------
 object Instrument {
   /** Dodaje do komponentu obserwowalna kopie payloadu strumienia. */
-  def stream[T <: Data](s : Stream[T], name : String) : Bits = {
-    val bits = s.payload.asBits.simPublic().setName(s"${name}_payload_bits")
-    bits
-  }
+  def stream[T <: Data](s : Stream[T], name : String) : Bits =
+    s.payload.asBits.simPublic().setName(s"${name}_payload_bits")
 }
 
 // ---------------------------------------------------------------------
-//  3. WSPOLNE TESTPOINTY DLA PORTU Stream
-//
-//  Odpowiednik csr_testplan.hjson: dolaczasz do dowolnego IP i dostajesz
-//  komplet testow kontraktu za darmo.
+//  WSPOLNE TESTPOINTY DLA PORTU Stream
 // ---------------------------------------------------------------------
 case class StreamPortHandle(valid   : Bool,
                             ready   : Bool,
@@ -115,8 +115,7 @@ object StreamConformance {
     }
   }
 
-  /** stream_valid_deasserted_in_reset
-    * Zaden port nie moze zglaszac valid w trakcie resetu. */
+  /** stream_valid_deasserted_in_reset */
   def quietDuringReset(cd : ClockDomain, p : StreamPortHandle) : Unit = fork {
     while (true) {
       cd.waitSampling()
@@ -125,8 +124,7 @@ object StreamConformance {
     }
   }
 
-  /** stream_no_deadlock
-    * Przy losowym backpressure transakcja musi w koncu przejsc. */
+  /** stream_no_deadlock */
   def noStall(cd : ClockDomain, p : StreamPortHandle, limit : Int) : Unit = fork {
     var stuck = 0
     while (true) {
@@ -171,25 +169,3 @@ object StreamConformance {
       checking = Seq("IP wraca do stanu jalowego",
                      "Transakcje po resecie przechodza poprawnie")))
 }
-
-// ---------------------------------------------------------------------
-//  4. PRZYKLAD UZYCIA
-// ---------------------------------------------------------------------
-//
-//  class MyIpSuite extends TestplanSuite {
-//
-//    val testplan =
-//      StreamConformance.testpoints("cmd") ++
-//      StreamConformance.testpoints("rsp") ++
-//      Seq(
-//        Testpoint("smoke", Stage.V1, "Podstawowa transakcja end-to-end",
-//          stimulus = Seq("..."), checking = Seq("...")),
-//        Testpoint("protocol_timing", Stage.V2, "...")
-//      )
-//
-//    testpoint("cmd_payload_stable") { dut.doSim { d =>
-//      StreamConformance.all(d.clockDomain, cmdHandle(d)); ... } }
-//
-//    unimplemented("cmd_stress_with_rand_reset",
-//                  "brak jeszcze wsparcia dla resetu w trakcie transakcji")
-//  }

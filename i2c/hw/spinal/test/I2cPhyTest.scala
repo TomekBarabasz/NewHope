@@ -7,12 +7,18 @@ import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.mutable
 
 // =====================================================================
-//  3. SUITA - wspolna dla obu implementacji PHY
+//  Suita kierowana - najprostsze testy, jedna konfiguracja, bez planu.
+//  Zostaje jako miejsce do szybkiego debugowania: gdy cos padnie w
+//  testplanie, tu sie to odtwarza w jednym przebiegu z fala.
+//
+//  I2cBusModel / I2cMonitor / I2cEvent -> I2cAgent.scala
+//  cmd / byte / setup                  -> I2cSmoke.scala
 // =====================================================================
 abstract class I2cPhySuite(label : String,
                            build : I2cGenerics => I2cPhyBase) extends AnyFunSuite {
   import I2cEvent._
   import I2cPhyCmdMode._
+  import I2cSmoke.{cmd, setup}
 
   val g = I2cGenerics(clkFrequency = 100 MHz, sclFrequency = 1 MHz)
 
@@ -21,30 +27,6 @@ abstract class I2cPhySuite(label : String,
     .workspaceName(label)
     .compile { build(g) }
 
-  // --- pomocniki --------------------------------------------------
-  def cmd(d : I2cPhyBase, mode : SpinalEnumElement[I2cPhyCmdMode.type],
-          data : Boolean = true) : Unit = {
-    d.io.cmd.valid        #= true
-    d.io.cmd.payload.mode #= mode
-    d.io.cmd.payload.data #= data
-    d.clockDomain.waitSamplingWhere(d.io.cmd.ready.toBoolean)
-    d.io.cmd.valid #= false
-  }
-
-  def setup(d : I2cPhyBase) : (I2cBusModel, I2cMonitor) = {
-    val bus = new I2cBusModel(d)
-    val mon = new I2cMonitor(d, bus)
-    d.io.cmd.valid #= false
-    d.io.pins.scl.read #= true
-    d.io.pins.sda.read #= true
-    d.clockDomain.forkStimulus(period = 10)
-    bus.start()
-    mon.start()
-    d.clockDomain.waitSampling(5)
-    (bus, mon)
-  }
-
-  // --- testy ------------------------------------------------------
   test("START i STOP daja warunki na magistrali") {
     dut.doSim(s"${label}_startStop", seed = 42) { d =>
       val (_, mon) = setup(d)
@@ -89,14 +71,15 @@ abstract class I2cPhySuite(label : String,
   test("clock stretching wydluza bit zamiast go gubic") {
     dut.doSim(s"${label}_stretch", seed = 42) { d =>
       val (bus, mon) = setup(d)
+      cmd(d, START)
 
       // slave trzyma SCL nisko przez 3 cwiartki po tym jak master ja puscil
       fork {
         d.clockDomain.waitSamplingWhere(!d.io.pins.scl.write.toBoolean)
+        d.clockDomain.waitSamplingWhere(d.io.pins.scl.write.toBoolean)
         bus.stretch(3 * g.quarterCycles)
       }
-      
-      cmd(d, START)
+
       cmd(d, BIT, data = false)
       cmd(d, STOP)
       d.clockDomain.waitSampling(20)
@@ -106,7 +89,6 @@ abstract class I2cPhySuite(label : String,
              s"stan wysoki SCL za krotki: ${mon.highLen}")
     }
   }
-
   test("multi_controller_clock_synchronization") {
     info("obcy master ściąga SCL już po tym, jak nasz ją puścił - " +
        "I2cPhy nie przeładowuje wtedy licznika i generuje dodatkowy impuls SCL")
@@ -133,8 +115,7 @@ abstract class I2cPhySuite(label : String,
     }
     */
   }
-
 }
 
-class I2cPhyFsmTest   extends I2cPhySuite("fsm",   g => new I2cPhyFsm(g))
-class I2cPhyTableTest extends I2cPhySuite("table", g => new I2cPhyTable(g))
+class I2cPhyFsmTest   extends I2cPhySuite("fsm",   g => I2cPhyFsm(g))
+class I2cPhyTableTest extends I2cPhySuite("table", g => I2cPhyTable(g))
