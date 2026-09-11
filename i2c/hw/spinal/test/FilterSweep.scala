@@ -113,7 +113,7 @@ object FilterSweep {
         case _            => None
       }
     val wave = waveOverride.getOrElse(SimEnv.waves)
-    val backend = SimBackend.parse(opt.getOrElse("--backend", "verilator"))
+    val backend = opt.get("--backend").map(SimBackend.parse).getOrElse(SimBackend.default)
 
     val cores = Runtime.getRuntime.availableProcessors
     val jobs  = math.max(1, math.min(opt.getOrElse("--jobs", "1").toInt, cores))

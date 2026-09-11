@@ -17,6 +17,6 @@ object Config {
     * miedzy suitami i wyscig przy FilterSweep --jobs > 1. */
   def simFor(b : SimBackend) = SimEnv(spinal).withBackend(b)
 
-  def sim = simFor(SimBackend.Verilator)
+  /** Backend z otoczenia - patrz SimBackend.default. */
+  def sim = simFor(SimBackend.default)
 }
-

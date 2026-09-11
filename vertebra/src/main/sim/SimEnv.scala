@@ -16,6 +16,13 @@ object SimBackend {
     case other => throw new IllegalArgumentException(
       s"--backend verilator|ghdl, nie $other")
   }
+
+  /** MUSI byc def - env moze sie zmienic miedzy uruchomieniami w tej samej
+    * sesji sbt (backendVrl / backendGhdl). Literowka w VERTEBRA_BACKEND ma
+    * rzucic, a nie po cichu wrocic do Verilatora: cicha regresja backendu
+    * jest gorsza niz jawny blad. */
+  def default : SimBackend =
+    sys.env.get("VERTEBRA_BACKEND").filter(_.nonEmpty).map(parse).getOrElse(Verilator)
 }
 
 object SimBackendOps {

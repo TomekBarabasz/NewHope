@@ -5,6 +5,7 @@ import spinal.core.sim._
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.mutable
 import scala.util.Random
+import newhope.vertebra.sim.SimBackend
 
 // =====================================================================
 //  Suita zbudowana na testpointach z OpenTitan hw/ip/i2c/data/
@@ -41,7 +42,7 @@ abstract class I2cPhyTestplan(label : String,
 
     lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
       .withFstWave
-      .workspaceName(s"${label}_$cfgName")
+      .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
       .compile { build(g) }
 
     def scenario(name : String)(body : (I2cPhyBase, I2cBusModel, I2cMonitor) => Unit) : Unit =

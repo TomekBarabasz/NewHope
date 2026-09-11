@@ -5,6 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import org.scalatest.funsuite.AnyFunSuite
 import scala.collection.mutable
+import newhope.vertebra.sim.SimBackend
 
 // =====================================================================
 //  Suita kierowana - najprostsze testy, jedna konfiguracja, bez planu.
@@ -24,7 +25,7 @@ abstract class I2cPhySuite(label : String,
 
   lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
     .withFstWave
-    .workspaceName(label)
+    .workspaceName(s"${label}_${SimBackend.default.label}")
     .compile { build(g) }
 
   test("START i STOP daja warunki na magistrali") {

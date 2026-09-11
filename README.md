@@ -4,18 +4,26 @@ from learning-hdl/SpinalHDL directory
 docker run --rm -ti -v .:/workspace -w /workspace -v .\.spinal-sbt:/sbt ghcr.io/spinalhdl/docker:master
 ```
 
-# generate Verilog
+# Komendy sbt
+## generate Verilog
 w <module>/hw/spinal/main
 są pliki declarujące uruchamiane obiekty z main do uruomienia np
 `object I2cPhyTableVerilog extends App`
 każdy taki się uruchamia runMain <nazwa-packagea>.<nazwa obiekty> np `org.newhope.i2c.I2cPhyTableVerilog`
 
-# włączanie waves
+## włączanie waves
 dużo zajmują właczamy tylko na życzenie
-sbt:i2c> wavesOn / wavesOff
-sbt:i2c> show Test/envVars
+wavesOn / wavesOff
+show Test/envVars
 
-# pomiary
+## włączanie simulation backend
+backendVrl / backendGhdl
+show Test/envVars
+
+## czyszczenie artefaktów po testach
+simClean
+
+## pomiary
 ```
 sbt "Test/runMain newhope.i2c.FilterSweep --w 1:4 --out a.csv" &
 sbt "Test/runMain newhope.i2c.FilterSweep --w 5:8 --out b.csv" &
@@ -26,15 +34,15 @@ albo
 sbt "Test/runMain newhope.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
 ```
 
+## testy
 ```sh
-// To run tests
 sbt  test
 sbt  testOnly *I2cPhyTest
 sbt  testOnly *AsyncFifoDemoTest
 sbt  runMain I2CExample.CdcInjectDemoSim //to jest App a nie AnyFunSuite
 ```
 
-# Komendy sbt
+## ogólnie
 projects
 projects i2c - przejście do modułu
 sbt:i2c> 
@@ -184,3 +192,21 @@ z wiedzą o strukturze synchronizatorów i o tym, które sygnały faktycznie mog
 w oknie niepewności.
 
 przebiegi w simWorkspace/CdcInjectDemo
+
+
+# Todo
+
+## w ghdl dodać sprawdzanie metavalue:
+Jest benign wtedy i tylko wtedy, gdy występuje wyłącznie w @0ms. Jeśli kiedyś pojawi się z niezerowym czasem, znaczy że jakiś rejestr nie ma resetu i wchodzi w stan nieokreślony w trakcie pracy — realny błąd, niewidoczny na Verilatorze. Warto to złapać maszynowo: jeśli wyjście GHDL-a przechodzi przez note w I2cSmoke.Result, dodaj filtr na metavalue z czasem innym niż @0ms i podnieś osobny werdykt. To jest ta „druga oś", o której pisałem — ale dopiero gdy będzie po co.
+Proste dodanie flagi nie działa (chyba idzie do --a/e a nie do --r)
+```scala
+def simBackendGhdl : T = {
+      c.withGHDL(GhdlFlags().withElaborationFlags(
+        "--ieee-asserts=disable-at-0",
+        "--assert-level=warning"))
+      c
+    }
+```
+
+### Zamienic AnyFunSuite na TestplanSuite z CommonTestplan.scala
+Druga: I2cPhyTestplan dziedziczy dziś po AnyFunSuite, nie po TestplanSuite z CommonTestplan.scala. Czyli nazwa filter_window_vs_quarter_boundary nie jest weryfikowana względem żadnej listy — dyscyplina „nie da się napisać testu spoza planu" z sekcji 3.2 handoffu jeszcze tu nie obowiązuje. Gdy będziesz przepinał tę suitę na TestplanSuite, ten testpoint trzeba będzie najpierw dopisać do testplan, i to jest dobra okazja, żeby sprawdzić, czy mechanizm działa na czymś, co istnieje naprawdę.

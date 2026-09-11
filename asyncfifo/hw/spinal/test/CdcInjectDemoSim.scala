@@ -1,4 +1,4 @@
-package org.newhope.asyncfifo
+package newhope.asyncfifo
 
 import spinal.core._
 import spinal.core.sim._

@@ -9,15 +9,29 @@ val spinalIdslPlugin = compilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-
 val scalatest        = "org.scalatest" %% "scalatest" % "3.2.19"
 val spinal           = Seq(spinalCore, spinalLib, spinalIdslPlugin)
 
-lazy val wavesOn  = taskKey[Unit]("FST wlaczone dla tej sesji sbt")
-lazy val wavesOff = taskKey[Unit]("FST wylaczone dla tej sesji sbt")
+lazy val wavesOn     = taskKey[Unit]("FST wlaczone dla tej sesji sbt")
+lazy val wavesOff    = taskKey[Unit]("FST wylaczone dla tej sesji sbt")
 lazy val wavesStatus = taskKey[Unit]("Aktualny stan")
+
+lazy val backendVrl  = taskKey[Unit]("Symulacje na Verilatorze")
+lazy val backendGhdl = taskKey[Unit]("Symulacje na GHDL")
+lazy val simStatus   = taskKey[Unit]("Aktualne ustawienia symulacji")
+lazy val simClean    = taskKey[Unit]("Usuwa simWorkspace i wygenerowany RTL")
 
 ThisBuild / wavesOn  := { System.setProperty("vertebra.waves", "1"); println("waves: ON") }
 ThisBuild / wavesOff := { System.setProperty("vertebra.waves", "0"); println("waves: OFF") }
-ThisBuild / wavesStatus := println(
-  s"vertebra.waves = ${sys.props.getOrElse("vertebra.waves", "<nieustawione>")} " +
-  s"(sprawdz przekazanie: show i2c/Test/envVars)")
+ThisBuild / backendVrl  := { System.setProperty("vertebra.backend", "verilator"); println("backend: verilator") }
+ThisBuild / backendGhdl := { System.setProperty("vertebra.backend", "ghdl");      println("backend: ghdl") }
+ThisBuild / simStatus   := println(
+  s"waves   = ${sys.props.getOrElse("vertebra.waves",   "<domyslne>")}\n" +
+  s"backend = ${sys.props.getOrElse("vertebra.backend", "<domyslne>")}")
+
+def cleanDir(d : File, log : Logger) : Unit =
+  if (d.exists) {
+    val n = (d ** "*").get.size
+    IO.delete(d)
+    log.info(s"usunieto ${d.getName} ($n plikow)")
+  } else log.info(s"${d.getName}: nie ma czego usuwac")
 
 /** Wspolne ustawienia modulu sprzetowego. */
 def hwSettings : Seq[Setting[_]] = Seq(
@@ -34,14 +48,29 @@ def hwSettings : Seq[Setting[_]] = Seq(
   Compile / run / baseDirectory := baseDirectory.value,
 
   // envVars jest TASKIEM, wiec sys.props czyta sie przy kazdym uruchomieniu.
-  // To jest most miedzy JVM sbt (gdzie siedzi wavesOn/wavesOff) a forkowana
-  // JVM testu. Gdyby to byl javaOptions - SettingKey - wartosc zamarzlaby
-  // przy ladowaniu builda.
-  Test / envVars += ("VERTEBRA_WAVES" -> sys.props.getOrElse("vertebra.waves", "0")),
-  Compile / run / envVars += ("VERTEBRA_WAVES" -> sys.props.getOrElse("vertebra.waves", "0")),
+  // To most miedzy JVM sbt (gdzie siedza wavesOn/backendGhdl) a forkowana
+  // JVM testu. javaOptions byloby SettingKey i zamrozilo wartosc.
+  Test / envVars ++= Map(
+    "VERTEBRA_WAVES"   -> sys.props.getOrElse("vertebra.waves",   "0"),
+    "VERTEBRA_BACKEND" -> sys.props.getOrElse("vertebra.backend", "verilator")),
+  Compile / run / envVars ++= Map(
+    "VERTEBRA_WAVES"   -> sys.props.getOrElse("vertebra.waves",   "0"),
+    "VERTEBRA_BACKEND" -> sys.props.getOrElse("vertebra.backend", "verilator")),
 
   libraryDependencies ++= spinal :+ (scalatest % Test),
-  publish / skip := true
+  publish / skip := true,
+  
+  // Wersja zachowująca cache, czyli kasująca tylko workspace'y przebiegów
+  simClean := {
+    val log = streams.value.log
+    val ws  = baseDirectory.value / "simWorkspace"
+    if (ws.exists) {
+      val doomed = IO.listFiles(ws).filter(f => f.isDirectory && !f.getName.startsWith("."))
+      doomed.foreach(IO.delete)
+      log.info(s"usunieto ${doomed.size} workspace'ow, cache zostal")
+    }
+    cleanDir(baseDirectory.value / "hw" / "gen", log)
+  },
 )
 
 lazy val vertebra = (project in file("vertebra"))
