@@ -1,4 +1,4 @@
-package org.newhope.vertebra
+package newhope.vertebra
 
 import spinal.core._
 import spinal.core.sim._
@@ -10,63 +10,149 @@ import scala.collection.mutable
 //  Odpowiednik hw/dv/tools/dvsim/testplans/*.hjson z OpenTitana:
 //  testpointy, ktore dotycza KAZDEGO IP, wyfaktoryzowane raz.
 //
-//  ZMIANA wzgledem poprzedniej wersji: testpoint bierze opcjonalny
-//  wariant. Jedna suita parametryzowana po konfiguracjach generuje
-//  N testow ScalaTest na jeden testpoint planu, a ScalaTest wymaga
-//  unikalnych nazw. Zbior "implemented" jest kluczowany sama nazwa
-//  testpointu, wiec kompletnosc liczy sie tak jak wczesniej.
+//  ZMIANY wzgledem poprzedniej wersji:
+//   1. pakiet newhope.vertebra (byl org.newhope.vertebra, a reszta
+//      biblioteki siedzi w newhope.vertebra.sim - to sie rozjezdzalo)
+//   2. guard na kolejnosc inicjalizacji `testplan` w podklasie
+//   3. unimplemented() bierze wariant, tak jak testpoint()
+//   4. completeness wywala sie na testpointach bez testu I bez
+//      unimplemented - "cichy brak" byl dotad tylko info()
+//   5. Testpoint wymaga niepustego `checking`
 // =====================================================================
 
 object Stage extends Enumeration {
   val V1, V2, V3 = Value   // V1: smoke + sanity, V2: pelna funkcjonalnosc,
 }                          // V3: stres, losowy reset, przypadki brzegowe
 
+// ---------------------------------------------------------------------
+//  Stimulus i checking sa rozdzielone celowo (patrz metodologia §3.4):
+//  to jest wykrywacz testow, ktore cos odpalaja i nie sprawdzaja
+//  niczego poza tym, ze symulacja nie padla. Pole opcjonalne niczego
+//  nie wykrywa, wiec `checking` jest wymagane.
+//
+//  `stimulus` moze byc puste - istnieja testpointy czysto statyczne
+//  (filter_window_vs_quarter_boundary liczy sie z generykow, bez
+//  zadnej symulacji), ale one nadal MAJA co sprawdzac.
+// ---------------------------------------------------------------------
 case class Testpoint(name     : String,
                      stage    : Stage.Value,
                      desc     : String,
                      stimulus : Seq[String] = Nil,
-                     checking : Seq[String] = Nil)
+                     checking : Seq[String] = Nil) {
+  require(name.nonEmpty, "testpoint bez nazwy")
+  require(checking.nonEmpty,
+    s"testpoint '$name' nie ma sekcji checking - co ten test ma stwierdzic?")
+}
 
 trait TestplanSuite extends AnyFunSuite {
 
+  /** UWAGA: w podklasie deklaruj to jako `def` albo `lazy val`.
+    *
+    * `val testplan = Seq(...)` inicjalizuje sie dopiero w miejscu swojej
+    * deklaracji w ciele klasy, a testpoint(...) wolane wyzej zobaczy
+    * jeszcze null. Guard `plan` ponizej to lapie i mowi, co zrobic. */
   def testplan : Seq[Testpoint]
 
-  private val implemented = mutable.Set[String]()
+  // nazwa -> warianty, w kolejnosci rejestracji (do raportu)
+  private val implemented = mutable.LinkedHashMap[String, mutable.Buffer[String]]()
+  // nazwa -> powod odlozenia
+  private val deferred    = mutable.LinkedHashMap[String, String]()
 
-  private def lookup(name : String) : Testpoint =
-    testplan.find(_.name == name).getOrElse(
-      throw new IllegalArgumentException(s"'$name' nie ma w testplanie - dopisz go najpierw"))
+  private def plan : Seq[Testpoint] = testplan match {
+    case null => throw new IllegalStateException(
+      "testplan == null w chwili rejestracji testu.\n" +
+      "Przyczyna: `val testplan` w podklasie inicjalizuje sie dopiero w miejscu\n" +
+      "swojej deklaracji, a testpoint(...) wolane wyzej widzi jeszcze null.\n" +
+      "Napraw: zadeklaruj `def testplan` albo `lazy val testplan`.")
+    case p => p
+  }
+
+  private def lookup(name : String) : Testpoint = {
+    val hits = plan.filter(_.name == name)
+    if (hits.isEmpty)
+      throw new IllegalArgumentException(
+        s"'$name' nie ma w testplanie - dopisz go najpierw " +
+        s"(plan ma ${plan.size} pozycji)")
+    if (hits.size > 1)
+      throw new IllegalArgumentException(
+        s"'$name' wystepuje w testplanie ${hits.size} razy - nazwy musza byc unikalne")
+    hits.head
+  }
 
   /** Test realizujacy testpoint z planu. Nazwa musi w nim istniec.
+    *
     * variant rozroznia wielokrotne wykonania tego samego testpointu
-    * (rozne konfiguracje generyka, rozne implementacje DUT-a). */
+    * (rozne konfiguracje generyka, rozne implementacje DUT-a). ScalaTest
+    * wymaga unikalnych nazw testow, ale kompletnosc liczy sie po samej
+    * nazwie testpointu - jedna konfiguracja wystarczy, zeby uznac go za
+    * zrobiony. Czy to wlasciwa semantyka, to osobne pytanie; dzis tak. */
   def testpoint(name : String, variant : String = "")(body : => Unit) : Unit = {
     val tp = lookup(name)
-    implemented += name
+    implemented.getOrElseUpdate(name, mutable.Buffer()) += variant
     val suffix = if (variant.isEmpty) "" else s" ($variant)"
     test(s"[${tp.stage}] $name$suffix") { body }
   }
 
   /** Testpoint znany, ale jeszcze nie zrobiony - odpowiednik
     * "No Tests Implemented" w raporcie OpenTitana. NIE liczy sie do
-    * kompletnosci, celowo: zolty wpis ma bolec. */
-  def unimplemented(name : String, reason : String) : Unit = {
+    * kompletnosci, celowo: zolty wpis ma bolec.
+    *
+    * Roznica wzgledem samego `pending`: tu nazwa jest weryfikowana
+    * wzgledem planu, a completeness odroznia "swiadomie odlozone" od
+    * "zapomniane". Gole `pending` daje ten sam kolor w raporcie i zadnej
+    * z tych dwoch informacji. */
+  def unimplemented(name : String, reason : String, variant : String = "") : Unit = {
     val tp = lookup(name)
-    test(s"[${tp.stage}] $name") {
+    deferred(name) = reason
+    val suffix = if (variant.isEmpty) "" else s" ($variant)"
+    test(s"[${tp.stage}] $name$suffix") {
       info(reason)
       pending
     }
   }
 
+  // -------------------------------------------------------------------
+  //  Ten test jest rejestrowany w ciele traita, czyli PRZED testpointami
+  //  podklasy, wiec pojdzie pierwszy. To nie szkodzi: `implemented` i
+  //  `deferred` sa wypelniane podczas KONSTRUKCJI (testpoint dopisuje do
+  //  zbioru od razu), a cialo testu wykonuje sie dopiero w fazie run.
+  // -------------------------------------------------------------------
   test("testplan completeness") {
-    val declared = testplan.map(_.name).toSet
-    val missing  = declared -- implemented
-    info(s"zaimplementowane: ${implemented.size}/${declared.size}")
-    missing.toSeq.sorted.foreach(n => info(s"  brak: $n"))
+    val byStage = plan.groupBy(_.stage)
+
+    Stage.values.toSeq.sortBy(_.id).foreach { s =>
+      val tps = byStage.getOrElse(s, Nil)
+      if (tps.nonEmpty) {
+        val done = tps.count(t => implemented.contains(t.name))
+        val pend = tps.count(t => deferred.contains(t.name))
+        info(f"$s%-3s ${done}%2d/${tps.size}%2d zrobione, $pend%2d odlozone")
+      }
+    }
+
+    implemented.toSeq.sortBy(_._1).foreach { case (n, vs) =>
+      val v = vs.filter(_.nonEmpty)
+      info(s"  ok:       $n" + (if (v.isEmpty) "" else v.mkString(" [", ", ", "]")))
+    }
+    deferred.toSeq.sortBy(_._1).foreach { case (n, r) =>
+      info(s"  odlozone: $n - $r")
+    }
+
+    // Testpoint, ktory nie ma ani testu, ani unimplemented(). To jest ta
+    // rzecz, ktora ma sie nie zdarzac po cichu - dopisales pozycje do
+    // planu i nikt jej nie tknal.
+    val ghosts = plan.map(_.name).toSet -- implemented.keySet -- deferred.keySet
+    ghosts.toSeq.sorted.foreach(n => info(s"  BRAK:     $n"))
+
     // Prog per stage - V1 musi byc kompletny, zeby w ogole ruszyc dalej.
-    val v1 = testplan.filter(_.stage == Stage.V1).map(_.name).toSet
-    assert((v1 -- implemented).isEmpty,
-           s"niekompletny stage V1: ${(v1 -- implemented).mkString(", ")}")
+    val v1      = plan.filter(_.stage == Stage.V1).map(_.name).toSet
+    val v1gap   = v1 -- implemented.keySet
+    assert(v1gap.isEmpty,
+           s"niekompletny stage V1: ${v1gap.toSeq.sorted.mkString(", ")}")
+
+    assert(ghosts.isEmpty,
+           "testpointy bez testu i bez unimplemented(...): " +
+           ghosts.toSeq.sorted.mkString(", ") +
+           " - dopisz test albo unimplemented(nazwa, powod)")
   }
 }
 
