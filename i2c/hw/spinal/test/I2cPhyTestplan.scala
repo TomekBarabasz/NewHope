@@ -22,14 +22,22 @@ abstract class I2cPhyTestplan(label : String,
   // i2c_timing_parameters_cg + i2c_operating_mode_cg: "Cover the SCL
   // frequency". Ostatnia pozycja to dolna granica quarterCycles - odpowiednik
   // "ensure sufficient test coverage around lower bound of THIGH".
+  case class Cfg(name : String, g : I2cGenerics)
+
   val configs = Seq(
-    "std100k"  -> I2cGenerics(100 MHz, 100 kHz),
-    "fast400k" -> I2cGenerics(100 MHz, 400 kHz),
-    "fmp1M"    -> I2cGenerics(100 MHz,   1 MHz),
-    "qmin"     -> I2cGenerics(100 MHz, 12.5 MHz)   // quarterCycles == 2
+    Cfg("std100k",  I2cGenerics(100 MHz, 100 kHz)),
+    Cfg("fast400k", I2cGenerics(100 MHz, 400 kHz)),
+    Cfg("fmp1M",    I2cGenerics(100 MHz,   1 MHz)),
+    // quarterCycles == 3: najkrotszy okres SCL, przy ktorym filtr jeszcze
+    // nadaza (w+3 = 6 == 2q, zapas 0) i przy ktorym monitor testbenchu
+    // ma czym probkowac (stan niski 6 cykli wobec okna monitora 4).
+    // 96/8/4 == 3 dokladnie - bez zmiennoprzecinkowej loterii.
+    // Przy q=2 wszystko trzy testy wymagaly wyjatkow; tutaj zaden nie jest
+    // potrzebny, a testpoint dalej dotyczy dolnej granicy THIGH.
+    Cfg("qmin", I2cGenerics(96 MHz, 8 MHz, filterWindow = 3))
   )
 
-  for ((cfgName, g) <- configs) {
+  for (Cfg(cfgName, g) <- configs) {
 
     lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
       .withFstWave
@@ -98,9 +106,13 @@ abstract class I2cPhyTestplan(label : String,
       cmd(d, STOP)
       d.clockDomain.waitSampling(20)
 
-      // Kazda komenda to 4 cwiartki + 1 cykl na zatrzasniecie kolejnej.
-      val expectedHigh = 2 * g.quarterCycles * 10   // period = 10 jednostek sim
-      assert(math.abs(mon.highLen - expectedHigh) <= 10 + 10,
+      // tHIGH = dwie cwiartki + falszywy stretching w Q1: filtr SCL widzi
+      // zero jeszcze przez filterWindow + 3 cykle po puszczeniu linii,
+      // a `when(stretching) { timer.restart() }` dokłada cykl rejestru.
+      // Ten sam czlon w+4 wychodzi z FilterSweep (siatka .stretch.csv,
+      // 10 puszczen SCL = 10*(w+4) cykli).
+      val expectedHigh = g.sclHighCycles * 10
+      assert(math.abs(mon.highLen - expectedHigh) <= 20,
              s"tHIGH = ${mon.highLen}, oczekiwano ~$expectedHigh")
       assert(mon.lowLen >= 2 * g.quarterCycles * 10,
              s"tLOW = ${mon.lowLen} za krotkie")
@@ -151,6 +163,46 @@ abstract class I2cPhyTestplan(label : String,
       d.clockDomain.waitSampling(20)
       mon.expect(Start, Bit(true), Stop)          // glitch niewidoczny
     }
+  }
+
+  // -----------------------------------------------------------------
+  //  filter_window_vs_quarter_boundary
+  //
+  //  Nie ma odpowiednika w OpenTitanie - to wlasnosc tej konkretnej
+  //  konstrukcji, znaleziona charakteryzacja (FilterSweep).
+  //
+  //  Zmierzone: opoznienie filtra = filterWindow + 3 cykle, dokladnie,
+  //  niezaleznie od quarterCycles (BufferCC 2 + okno w + rejestr 1).
+  //  Gdy przekroczy polokres SCL, filtr przestaje nadazac za magistrala:
+  //  czesc opadniec SCL ginie, `stretching` przestaje sie podnosic.
+  //
+  //  DUT wtedy NADAL DZIALA - protokol i odczyt przechodza, bo opoznienie
+  //  toru SDA jest kompensowane przez falszywy stretching toru SCL (oba
+  //  tory maja to samo okno). Rozjezdza sie timing, nie poprawnosc.
+  //  Dlatego to jest test na PARAMETRY, bez symulacji - zero kompilacji.
+  //
+  //  Granice kalibrowac przez: FilterSweep --w 1:20 --q 2:6 --backend ghdl
+  //  (siatka .stretch.csv, punkt nasycenia krzywej).
+  // -----------------------------------------------------------------
+  test("filter_window_vs_quarter_boundary") {
+    configs.foreach { c =>
+      val margin = 2 * c.g.quarterCycles - c.g.filterLatency
+      info(f"${c.name}%-10s w=${c.g.filterWindow}%2d  2q=${2 * c.g.quarterCycles}%3d  zapas=$margin%3d")
+    }
+
+    val bad = configs.filterNot(_.g.filterTracksScl)
+    assert(bad.isEmpty,
+      "filtr SCL nie nadaza w konfiguracjach: " +
+      bad.map(c => s"${c.name} (w=${c.g.filterWindow}, 2q=${2 * c.g.quarterCycles})").mkString(", "))
+
+    // Ten sam warunek po stronie TESTBENCHU: filtr monitora przelacza stan
+    // po `window` probkach, wiec stan linii krotszy niz okno do dekodera
+    // nie dojdzie. Objaw jest mylacy - zamiast bledu timingu dostajesz
+    // sekwencje Start,Stop,Start,Stop bez zadnego Bit-u.
+    val blind = configs.filter(c => I2cMonitor.defaultWindow >= 2 * c.g.quarterCycles)
+    assert(blind.isEmpty,
+      s"monitor (okno ${I2cMonitor.defaultWindow}) nie zobaczy zbocz w: " +
+      blind.map(c => s"${c.name} (2q=${2 * c.g.quarterCycles})").mkString(", "))
   }
 
   // -----------------------------------------------------------------

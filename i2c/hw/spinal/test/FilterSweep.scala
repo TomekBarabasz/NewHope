@@ -1,8 +1,9 @@
 package newhope.i2c
 
 import spinal.core._
+import spinal.core.sim._
 import newhope.vertebra.Characterization._
-import newhope.vertebra.sim.SimBackend
+import newhope.vertebra.sim.{SimBackend, SimEnv}
 
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -16,10 +17,10 @@ import scala.concurrent.duration.Duration
 //  regresyjne mieszka w testplanie jako filter_window_vs_quarter_boundary
 //  i kosztuje cztery kompilacje, nie piecdziesiat szesc.
 //
-//    sbt "Test/runMain mylib.i2c.FilterSweep --model"
-//    sbt "Test/runMain mylib.i2c.FilterSweep --jobs 4"
-//    sbt "Test/runMain mylib.i2c.FilterSweep --check filter_sweep.baseline.csv"
-//    sbt "Test/runMain mylib.i2c.FilterSweep --merge a.csv,b.csv --out all.csv"
+//    sbt "Test/runMain newhope.i2c.FilterSweep --model"
+//    sbt "Test/runMain newhope.i2c.FilterSweep --jobs 4"
+//    sbt "Test/runMain newhope.i2c.FilterSweep --check filter_sweep.baseline.csv"
+//    sbt "Test/runMain newhope.i2c.FilterSweep --merge a.csv,b.csv --out all.csv"
 //
 //  ZROWNOLEGLENIE
 //  --------------
@@ -32,15 +33,15 @@ import scala.concurrent.duration.Duration
 //  ZANIM puscisz --jobs 8. Rozjazd == elaboracja dzieli stan.
 //
 //  Wariant bez tego zalozenia: shardowanie po PROCESACH.
-//    sbt "Test/runMain mylib.i2c.FilterSweep --w 1:4 --out a.csv" &
-//    sbt "Test/runMain mylib.i2c.FilterSweep --w 5:8 --out b.csv" &
+//    sbt "Test/runMain newhope.i2c.FilterSweep --w 1:4 --out a.csv" &
+//    sbt "Test/runMain newhope.i2c.FilterSweep --w 5:8 --out b.csv" &
 //    wait
-//    sbt "Test/runMain mylib.i2c.FilterSweep --merge a.csv,b.csv --out all.csv"
+//    sbt "Test/runMain newhope.i2c.FilterSweep --merge a.csv,b.csv --out all.csv"
 //  Wolniejszy start (drugi JVM), za to zero pytan o wspoldzielony stan.
 // =====================================================================
 object FilterSweep {
 
-  private val flags = Set("--wave", "--model")
+  private val flags = Set("--wave", "--no-wave", "--model")
 
   private def parse(args : Array[String]) : (Map[String, String], Set[String]) = {
     val opts = collection.mutable.Map[String, String]()
@@ -49,7 +50,7 @@ object FilterSweep {
     while (i < args.length) {
       val a = args(i)
       require(a.startsWith("--"), s"nieoczekiwany argument: $a")
-      if (flags(a)) { set += a; i += 1 }
+      if (flags.contains(a)) { set += a; i += 1 }
       else {
         require(i + 1 < args.length, s"$a wymaga wartosci")
         opts(a) = args(i + 1); i += 2
@@ -74,9 +75,14 @@ object FilterSweep {
     // Zamiast liczyc sclFrequency = 100e6/(4q) i modlic sie o zaokraglenie
     // w (clk/scl/4).toInt - dobieramy zegar systemowy. 4q MHz / 1 MHz / 4
     // == q dokladnie, bez zmiennoprzecinkowej loterii.
-    val g = I2cGenerics(clkFrequency = (4 * q) MHz,
+    val g = try I2cGenerics(clkFrequency = (4 * q) MHz,
                         sclFrequency = 1 MHz,
                         filterWindow = w)
+            catch { case e: Throwable =>
+              return (Cell(Seq("w" -> w, "q" -> q), "C"),
+              I2cSmoke.Result(false, false, false, compiled = false,
+                              note = s"${e.getClass.getSimpleName}: ${e.getMessage}"))
+            }
     require(g.quarterCycles == q, s"zaokraglenie: chcialem q=$q, wyszlo ${g.quarterCycles}")
 
     val r = I2cSmoke.run(g, build, s"sweep_${impl}_w${w}_q$q", wave, backend)
@@ -99,23 +105,36 @@ object FilterSweep {
     val ws   = range(opt.getOrElse("--w", "1:8"))
     val qs   = range(opt.getOrElse("--q", "2:8"))
     val impl = opt.getOrElse("--impl", "table")
-    val wave = flag("--wave")
+    val waveOverride : Option[Boolean] =
+      (flag("--wave"), flag("--no-wave")) match {
+        case (true, true) => throw new IllegalArgumentException("--wave i --no-wave naraz")
+        case (true, _)    => Some(true)
+        case (_, true)    => Some(false)
+        case _            => None
+      }
+    val wave = waveOverride.getOrElse(SimEnv.waves)
     val backend = SimBackend.parse(opt.getOrElse("--backend", "verilator"))
 
     val cores = Runtime.getRuntime.availableProcessors
     val jobs  = math.max(1, math.min(opt.getOrElse("--jobs", "1").toInt, cores))
 
+    def instrument(d : I2cPhyBase) : I2cPhyBase = {
+      d.stretching.simPublic()
+      d.filter.scl.simPublic()
+      d.filter.sda.simPublic()
+      d
+    }
     val build : I2cGenerics => I2cPhyBase = impl match {
-      case "table" => g => I2cPhyTable(g)
-      case "fsm"   => g => I2cPhyFsm(g)
+      case "table" => g => instrument(I2cPhyTable(g))
+      case "fsm"   => g => instrument(I2cPhyFsm(g))
       case other   => throw new IllegalArgumentException(s"--impl table|fsm, nie $other")
     }
 
     val points = (for (w <- ws; q <- qs) yield (w, q)).toSeq
-    println(s"sweep $impl: w in $ws, q in $qs -> ${points.size} kompilacji Verilatora, "
+    println(s"sweep $impl: w in $ws, q in $qs -> ${points.size} kompilacji ${backend.label}, "
           + s"jobs=$jobs (rdzeni: $cores)")
     if (jobs > 1)
-      println("UWAGA: verilator + g++ same biora pamiec; licz ok. 1-2 GB na job")
+      println(s"UWAGA: ${backend.label} + g++ same biora pamiec; licz ok. 1-2 GB na job")
     if (wave)
       println(s"UWAGA: --wave przy ${points.size} przebiegach to kilka GB FST")
 
@@ -179,22 +198,18 @@ object FilterSweep {
     println(stretch.render(rowAxis = "w", colAxis = "q"))
     stretch.write(out.replace(".csv", "") + ".stretch.csv")
 
-    // --- czy pomiar zgadza sie z modelem analitycznym ----------------
-    // Kalibracja stalej FilterModel.slack. Jesli tu cokolwiek wyjdzie,
-    // popraw model, nie testpoint.
     if (flag("--model")) {
-      val bad = cells.filter { c =>
+      val bad = results.collect { case (c, r) if r.compiled =>
         val Seq(w, q) = c.key
-        (c.verdict == ".") != FilterModel.readOk(w, q)
-      }
+        val model = I2cGenerics((4 * q) MHz, 1 MHz, w).filterLatency
+        (w, q, r.sdaLatency, model)
+      }.filter { case (_, _, pomiar, model) => pomiar != model }
+
       println()
-      if (bad.isEmpty) println(s"model (slack=${FilterModel.slack}) zgadza sie z pomiarem")
+      if (bad.isEmpty) println("model opoznienia filtra zgadza sie z pomiarem")
       else {
         println(s"MODEL SIE NIE ZGADZA w ${bad.size} komorkach:")
-        bad.foreach { c =>
-          val Seq(w, q) = c.key
-          println(s"  w=$w q=$q: pomiar=${c.verdict}, model=${FilterModel.readOk(w, q)}")
-        }
+        bad.foreach { case (w, q, p, m) => println(s"  w=$w q=$q: pomiar=$p, model=$m") }
       }
     }
 

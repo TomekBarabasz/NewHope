@@ -7,19 +7,45 @@ import newhope.vertebra.sim.SimBackend
 import scala.collection.mutable
 
 // =====================================================================
-//  JEDEN przebieg smoke, wolany z dwoch miejsc:
-//   - FilterSweep  (charakteryzacja, 50+ kompilacji, wynik = siatka)
-//   - I2cPhyTestplan / filter_window_vs_quarter_boundary (regresja, 4 punkty)
+//  JEDEN przebieg smoke - kompilacja DUT-a dla zadanego generyka plus
+//  jedna transakcja zapis/odczyt. NIE rzuca: wszystkie awarie wracaja
+//  w Result. To jest cala roznica miedzy tym a zwyklym testem - sweep
+//  musi przejsc przez komorki, ktore z zalozenia nie dzialaja.
 //
-//  Gdyby to bylo napisane dwa razy, za pol roku byloby to dwa lekko
-//  rozjechane smoke'y i sweep przestalby cokolwiek mowic o regresji.
+//  Przebieg dotyka OBU torow filtra wejsciowego:
 //
-//  Przebieg dotyka OBU torow filtra:
-//   - tor SCL: falszywe `stretching` (sclReg && !filter.scl) wydluza
-//     cwiartke; psuje timing, protokolu nie psuje,
+//   - tor SCL: po puszczeniu linii `filter.scl` widzi zero jeszcze przez
+//     filterLatency cykli, wiec `stretching` (sclReg && !filter.scl) jest
+//     falszywie aktywne i `when(stretching) { timer.restart() }` rozciaga
+//     cwiartke. Koszt: filterLatency + 1 cykl na kazde puszczenie SCL.
+//
 //   - tor SDA: io.rsp.data := filter.sda probkowane w Q2, a poziom
-//     ustawiony w Q0 -> na dojscie filtra sa 2 cwiartki.
-//  Dlatego Result ma dwa osobne pola, a nie Boolean.
+//     wystawiony w Q0.
+//
+//  KOMPENSACJA (zmierzona, nie zalozona). Okno na ustalenie SDA to NIE
+//  sa dwie cwiartki, tylko 2*quarterCycles + filterLatency - bo Q1 jest
+//  rozciagane opoznieniem toru SCL. Oba tory maja to samo okno, wiec
+//  opoznienie SDA jest kompensowane co do cyklu i readOk nie moze paść
+//  z powodu filtra. FilterSweep --w 1:20 --q 4:4 daje same kropki.
+//
+//  UWAGA: kompensacja znika, jesli tory dostana rozne okna filtra.
+//  Wtedy granica odczytu pojawia sie naprawde i ten przebieg zacznie
+//  zwracac "R".
+//
+//  Skoro werdykt jest slepy na filtr, wlasciwym wynikiem sa METRYKI:
+//  sdaLatency i stretchCycles z FilterProbe. Granice widac dopiero w
+//  siatce stretch - krzywa 10*(w+4) nasyca sie w punkcie, w ktorym
+//  filterLatency przekracza polokres SCL i filtr przestaje sledzic
+//  magistrale (patrz I2cGenerics.filterTracksScl).
+//
+//  Model konstrukcyjny (I2cGenerics): filterLatency = filterWindow + 3,
+//  czyli BufferCC(2) + napelnienie okna(w) + rejestr value(1). Zmierzone
+//  co do cyklu dla w = 1..20. Kalibracja: FilterSweep --model.
+//
+//  Sekcja drivera (cmd / byte / cmdWithSda / setup) jest JEDYNA w
+//  projekcie - wolaja ja I2cPhySuite, I2cPhyTestplan i `run` ponizej.
+//  Gdyby byla napisana trzy razy, za pol roku bylyby to trzy lekko
+//  rozjechane drivery i sweep przestalby mowic cokolwiek o regresji.
 // =====================================================================
 object I2cSmoke {
   import I2cEvent._
@@ -61,14 +87,29 @@ object I2cSmoke {
     d.clockDomain.waitSamplingWhere(d.io.cmd.ready.toBoolean)
     d.io.cmd.valid #= false
   }
+  
+  /** Jak cmd, ale zaklocenie SDA wchodzi dopiero w Q0 juz przyjetej
+    * komendy. Bez tego "slave" odpowiada, zanim master zdazyl zapytac,
+    * i filtr dostaje na dojscie caly czas sprzed handshake'u. */
+  def cmdWithSda(d : I2cPhyBase, bus : I2cBusModel,
+                 mode : SpinalEnumElement[I2cPhyCmdMode.type],
+                 data : Boolean, pull : Boolean) : Unit = {
+    d.io.cmd.valid        #= true
+    d.io.cmd.payload.mode #= mode
+    d.io.cmd.payload.data #= data
+    d.clockDomain.waitSampling()      // DUT zatrzasnal valid -> Q0 trwa
+    bus.sdaPull = pull
+    d.clockDomain.waitSamplingWhere(d.io.cmd.ready.toBoolean)
+    d.io.cmd.valid #= false
+  }
 
   def byte(d : I2cPhyBase, v : Int) : Unit =
     for (i <- 7 downto 0) cmd(d, BIT, ((v >> i) & 1) != 0)
 
-  /** Okno monitora jest STALE, nie g.filterWindow - patrz naglowek
-    * I2cAgent.scala. Przypiecie go do generyka DUT-a sprawialo, ze sweep
-    * mierzyl sume DUT-a i testbenchu. `g` zostaje w sygnaturze, bo wolaja
-    * to wszystkie suity, i przyda sie przy budzetach czasowych. */
+  /** Monitor ma STALE okno filtra, niezalezne od g.filterWindow - patrz
+    * naglowek I2cAgent.scala. Przypiecie go do generyka DUT-a sprawialo,
+    * ze sweep mierzyl sume opoznien DUT-a i testbenchu zamiast samego
+    * DUT-a. Dlatego `g` zniknelo z sygnatury. */
   def setup(d : I2cPhyBase) : (I2cBusModel, I2cMonitor) = {
     val bus = new I2cBusModel(d)
     val mon = new I2cMonitor(d, bus)
@@ -97,7 +138,7 @@ object I2cSmoke {
     // w I2cGenerics. To osobny werdykt, nie awaria filtra.
     val compiled : Either[String, SimCompiled[I2cPhyBase]] =
       try {
-        val base = Config.simFor(backend).sim.workspaceName(workspace)
+        val base = Config.simFor(backend).workspaceName(workspace)
         Right((if (wave) base.withFstWave else base).compile { build(g) })
       } catch {
         case e : Throwable => Left(s"${e.getClass.getSimpleName}: ${e.getMessage}")
@@ -133,9 +174,8 @@ object I2cSmoke {
         FlowMonitor(d.io.rsp, d.clockDomain) { p => seen.enqueue(p.data.toBoolean) }
 
         cmd(d, START)
-        byte(d, payload)              // tor zapisu: 8 bitow sterowanych przez mastera
-        bus.sdaPull = true            // slave odpowiada zerem
-        cmd(d, BIT, data = true)      // master puszcza linie -> tor odczytu
+        byte(d, payload)
+        cmdWithSda(d, bus, BIT, data = true, pull = true)   // tor odczytu
         bus.sdaPull = false
         cmd(d, STOP)
         d.clockDomain.waitSampling(20)
@@ -189,37 +229,5 @@ object I2cSmoke {
       depth += 1
     }
     hit
-  }
-}
-
-// =====================================================================
-//  MODEL ANALITYCZNY GRANICY - jedno miejsce w projekcie.
-//
-//  Opoznienie filtra od zmiany na pinie do zmiany I2cInputFilter.value:
-//    BufferCC          -> 2 cykle
-//    napelnienie okna  -> filterWindow cykli (window.andR / !window.orR)
-//    rejestr `value`   -> ok. 1 cykl
-//  Probkowanie ma na to 2 cwiartki (Q0 -> Q2), czyli 2*quarterCycles.
-//
-//  UWAGA: stala `slack` jest ZGADNIETA. Kalibracja nalezy do sweepa -
-//  odpal FilterSweep --model i popraw TU, jesli pomiar mowi inaczej.
-//  Nie poprawiaj testpointu, popraw model.
-// =====================================================================
-object FilterModel {
-  val slack = 2   // <- kalibrowac przebiegiem FilterSweep
-
-  def readOk(filterWindow : Int, quarterCycles : Int) : Boolean =
-    filterWindow + slack <= 2 * quarterCycles
-
-  /** Punkty regresyjne: po dwa po kazdej stronie granicy, dla dwoch
-    * roznych quarterCycles. Cztery kompilacje zamiast pieciudziesieciu
-    * szesciu - skoro mamy model, bronimy modelu, a nie skanujemy
-    * przestrzen od nowa przy kazdym commicie. */
-  def edgePoints : Seq[(Int, Int)] = {
-    def around(q : Int) : Seq[(Int, Int)] = {
-      val last = 2 * q - slack          // najwiekszy w, ktory ma przejsc
-      Seq((last, q), (last + 1, q))
-    }
-    (around(2) ++ around(4)).filter { case (w, _) => w >= 1 }
   }
 }

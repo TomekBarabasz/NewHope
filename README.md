@@ -10,15 +10,20 @@ są pliki declarujące uruchamiane obiekty z main do uruomienia np
 `object I2cPhyTableVerilog extends App`
 każdy taki się uruchamia runMain <nazwa-packagea>.<nazwa obiekty> np `org.newhope.i2c.I2cPhyTableVerilog`
 
+# włączanie waves
+dużo zajmują właczamy tylko na życzenie
+sbt:i2c> wavesOn / wavesOff
+sbt:i2c> show Test/envVars
+
 # pomiary
 ```
-sbt "Test/runMain mylib.i2c.FilterSweep --w 1:4 --out a.csv" &
-sbt "Test/runMain mylib.i2c.FilterSweep --w 5:8 --out b.csv" &
+sbt "Test/runMain newhope.i2c.FilterSweep --w 1:4 --out a.csv" &
+sbt "Test/runMain newhope.i2c.FilterSweep --w 5:8 --out b.csv" &
 wait
-sbt "Test/runMain mylib.i2c.FilterSweep --merge a.csv,b.csv --out filter_sweep.csv"
+sbt "Test/runMain newhope.i2c.FilterSweep --merge a.csv,b.csv --out filter_sweep.csv"
 
 albo 
-sbt "Test/runMain mylib.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
+sbt "Test/runMain newhope.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
 ```
 
 ```sh

@@ -12,12 +12,40 @@ case class I2cGenerics(clkFrequency  : HertzNumber,
                        sclFrequency  : HertzNumber = 100 kHz,
                        filterWindow  : Int         = 4) {
 
+  assert(quarterCycles >= 2,
+       s"Zegar systemowy za wolny wzgledem SCL: $clkFrequency / $sclFrequency / 4 = $quarterCycles")
+
   // Okres SCL dzielimy na CWIARTKI, nie polowki: SDA zmienia sie
   // w srodku niskiego stanu SCL, a probkujemy w srodku wysokiego.
   def quarterCycles : Int      = (clkFrequency / sclFrequency / 4).toInt
   def quarterWidth  : BitCount = log2Up(quarterCycles + 1) bits
 
-  assert(quarterCycles >= 2, "Zegar systemowy za wolny wzgledem SCL")
+  /** Opoznienie filtra od pinu do wartosci: BufferCC(2) + okno(w) + rejestr(1).
+    * Zmierzone dokladnie, FilterSweep --w 1:20 (siatka .latency.csv). */
+  def filterLatency : Int = filterWindow + 3
+
+  /** Falszywy stretching na jedno puszczenie SCL: filterLatency plus cykl
+    * na zadzialanie `when(stretching) { timer.restart() }`. */
+  def falseStretchCycles : Int = filterLatency + 1
+
+  /** Realny czas trwania wysokiego SCL w cyklach zegara systemowego. */
+  def sclHighCycles : Int = 2 * quarterCycles + falseStretchCycles
+
+  /** Czy filtr SCL nadaza za magistrala.
+    *
+    * Ponizej progu DUT NADAL DZIALA - protokol i odczyt przechodza, bo
+    * opoznienie toru SDA jest kompensowane przez falszywy `stretching`
+    * toru SCL (oba tory maja to samo okno). Degeneruje sie wylacznie
+    * wiernosc `filter.scl`: czesc opadnieć SCL ginie, `stretching`
+    * przestaje sie podnosic i timing SCL sie rozjezdza.
+    *
+    * Stala 3 = BufferCC(2) + rejestr `value`(1); okno `filterWindow`
+    * dochodzi osobno. Zmierzone: latency = filterWindow + 3 dokladnie,
+    * FilterSweep --w 1:20 --q 2:6, patrz filter_sweep.stretch.csv
+    * (nasycenie krzywej startuje w punkcie filterWindow + 3 == 2q).
+    *
+    * UWAGA: kompensacja znika, jesli tory SCL i SDA dostana rozne okna. */
+  def filterTracksScl : Boolean = filterWindow + 3 <= 2 * quarterCycles
 }
 
 // ---------------------------------------------------------------------
