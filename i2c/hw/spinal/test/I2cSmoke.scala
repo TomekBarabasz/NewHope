@@ -1,8 +1,9 @@
-package org.newhope.i2c
+package newhope.i2c
 
 import spinal.core._
 import spinal.core.sim._
 import spinal.lib.sim.FlowMonitor
+import newhope.vertebra.sim.SimBackend
 import scala.collection.mutable
 
 // =====================================================================
@@ -89,13 +90,14 @@ object I2cSmoke {
   def run(g         : I2cGenerics,
           build     : I2cGenerics => I2cPhyBase,
           workspace : String,
-          wave      : Boolean = false) : Result = {
+          wave      : Boolean = false,
+          backend   : SimBackend = SimBackend.Verilator) : Result = {
 
     // Elaboracja tez moze sie wywalic - np. assert(quarterCycles >= 2)
     // w I2cGenerics. To osobny werdykt, nie awaria filtra.
     val compiled : Either[String, SimCompiled[I2cPhyBase]] =
       try {
-        val base = Config.sim.workspaceName(workspace)
+        val base = Config.simFor(backend).sim.workspaceName(workspace)
         Right((if (wave) base.withFstWave else base).compile { build(g) })
       } catch {
         case e : Throwable => Left(s"${e.getClass.getSimpleName}: ${e.getMessage}")

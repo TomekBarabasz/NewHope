@@ -1,4 +1,4 @@
-package org.newhope.i2c
+package newhope.i2c
 
 import spinal.core._
 import spinal.lib._

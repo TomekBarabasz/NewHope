@@ -1,4 +1,4 @@
-package org.newhope.i2c
+package newhope.i2c
 
 import spinal.core._
 import spinal.lib._
@@ -140,6 +140,16 @@ object I2cPhyTableVerilog extends App {
     defaultClockDomainFrequency = FixedFrequency(100 MHz),
     anonymSignalUniqueness      = true
   ).generateVerilog(
+    InOutWrapper(I2cPhyTable(I2cGenerics(clkFrequency = 100 MHz)))
+  )
+}
+
+object I2cPhyTableVhdl extends App {
+  SpinalConfig(
+    targetDirectory             = "hw/gen/vhdl",
+    defaultClockDomainFrequency = FixedFrequency(100 MHz),
+    anonymSignalUniqueness      = true
+  ).generateVhdl(
     InOutWrapper(I2cPhyTable(I2cGenerics(clkFrequency = 100 MHz)))
   )
 }

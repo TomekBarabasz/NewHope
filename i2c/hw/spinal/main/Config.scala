@@ -1,7 +1,7 @@
-package org.newhope.i2c
+package newhope.i2c
 
 import spinal.core._
-import vertebra.sim.SimEnv
+import newhope.vertebra.sim.SimEnv
 
 object Config {
   def spinal = SpinalConfig(

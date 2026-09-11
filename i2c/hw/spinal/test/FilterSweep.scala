@@ -1,7 +1,8 @@
-package org.newhope.i2c
+package newhope.i2c
 
 import spinal.core._
-import org.newhope.vertebra.Characterization._
+import newhope.vertebra.Characterization._
+import newhope.vertebra.sim.SimBackend
 
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
@@ -68,7 +69,8 @@ object FilterSweep {
     * zrownoleglenia i jedyny, ktory moge zagwarantowac z tej strony. */
   private def runCell(w : Int, q : Int, impl : String,
                       build : I2cGenerics => I2cPhyBase,
-                      wave : Boolean) : (Cell, I2cSmoke.Result) = {
+                      wave : Boolean,
+                      backend   : SimBackend) : (Cell, I2cSmoke.Result) = {
     // Zamiast liczyc sclFrequency = 100e6/(4q) i modlic sie o zaokraglenie
     // w (clk/scl/4).toInt - dobieramy zegar systemowy. 4q MHz / 1 MHz / 4
     // == q dokladnie, bez zmiennoprzecinkowej loterii.
@@ -77,7 +79,7 @@ object FilterSweep {
                         filterWindow = w)
     require(g.quarterCycles == q, s"zaokraglenie: chcialem q=$q, wyszlo ${g.quarterCycles}")
 
-    val r = I2cSmoke.run(g, build, s"sweep_${impl}_w${w}_q$q", wave)
+    val r = I2cSmoke.run(g, build, s"sweep_${impl}_w${w}_q$q", wave, backend)
     (Cell(Seq("w" -> w, "q" -> q), r.verdict), r)
   }
 
@@ -98,6 +100,7 @@ object FilterSweep {
     val qs   = range(opt.getOrElse("--q", "2:8"))
     val impl = opt.getOrElse("--impl", "table")
     val wave = flag("--wave")
+    val backend = SimBackend.parse(opt.getOrElse("--backend", "verilator"))
 
     val cores = Runtime.getRuntime.availableProcessors
     val jobs  = math.max(1, math.min(opt.getOrElse("--jobs", "1").toInt, cores))
@@ -121,7 +124,7 @@ object FilterSweep {
 
     val results : Seq[(Cell, I2cSmoke.Result)] =
       if (jobs == 1) points.map { case (w, q) =>
-        val res = runCell(w, q, impl, build, wave)
+        val res = runCell(w, q, impl, build, wave, backend)
         report(res, done.incrementAndGet(), points.size)
         res
       }
@@ -130,7 +133,7 @@ object FilterSweep {
         implicit val ec : ExecutionContext = ExecutionContext.fromExecutorService(pool)
         try {
           val fs = points.map { case (w, q) => Future {
-            val res = runCell(w, q, impl, build, wave)
+            val res = runCell(w, q, impl, build, wave, backend)
             // println jest zsynchronizowany na PrintStream, wiec cala
             // linia wychodzi w calosci; kolejnosc linii bedzie losowa.
             report(res, done.incrementAndGet(), points.size)

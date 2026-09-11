@@ -1,4 +1,4 @@
-package org.newhope.vertebra
+package newhope.vertebra
 
 import java.nio.file.{Files, Paths}
 import scala.io.Source

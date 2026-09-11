@@ -1,8 +1,21 @@
 // vertebra/src/main/scala/vertebra/sim/SimEnv.scala
-package vertebra.sim
+package newhope.vertebra.sim
 
 import spinal.core.SpinalConfig
 import spinal.core.sim._
+
+sealed trait SimBackend { def label : String }
+object SimBackend {
+  case object Verilator extends SimBackend { val label = "vrl"  }
+  case object GhdlMcode extends SimBackend { val label = "ghdl" }
+
+  def parse(s : String) : SimBackend = s match {
+    case "verilator" | "vrl"  => Verilator
+    case "ghdl"      | "mcode"=> GhdlMcode
+    case other => throw new IllegalArgumentException(
+      s"--backend verilator|ghdl, nie $other")
+  }
+}
 
 object SimEnv {
 
