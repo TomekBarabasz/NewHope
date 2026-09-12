@@ -1,0 +1,72 @@
+#=====================================================================#
+#  Mimas V2 (XC6SLX9-CSG324) - projekt AHT10                          #
+#                                                                     #
+#  ETAP 0: aktywne tylko clk i led. Reszta zakomentowana, bo ngdbuild #
+#  skarzy sie na constrainty dla nieistniejacych netow.               #
+#                                                                     #
+#  UWAGA NA NUMERACJE. Referencyjny UCF Numato numeruje magistrale     #
+#  ODWROTNIE do sitodruku:                                            #
+#     ich LED[7]      = D1  (pierwsza dioda)                          #
+#     ich DPSwitch[7] = DP1 (pierwszy przelacznik)                    #
+#  Tutaj indeks 0 = pierwszy element na sitodruku, bo inaczej "DP1"    #
+#  w kodzie oznaczaloby fizyczny DP8. To jest dokladnie ta pulapka,    #
+#  na ktorej ludzie gubia sie na tej plytce.                          #
+#=====================================================================#
+
+CONFIG VCCAUX = "3.3" ;
+
+#---------------------------------------------------------------------#
+#  Zegar 100 MHz z oscylatora pokladowego                             #
+#---------------------------------------------------------------------#
+NET "clk" LOC = V10 | IOSTANDARD = LVCMOS33 ;
+NET "clk" TNM_NET = clk ;
+TIMESPEC TS_clk = PERIOD "clk" 100 MHz HIGH 50% ;
+
+#---------------------------------------------------------------------#
+#  LED - aktywne w stanie WYSOKIM (potwierdzic w etapie 0)            #
+#---------------------------------------------------------------------#
+NET "led[0]" LOC = P15 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D1
+NET "led[1]" LOC = P16 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D2
+NET "led[2]" LOC = N15 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D3
+NET "led[3]" LOC = N16 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D4
+NET "led[4]" LOC = U17 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D5
+NET "led[5]" LOC = U18 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D6
+NET "led[6]" LOC = T17 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D7
+NET "led[7]" LOC = T18 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # D8
+
+#=====================================================================#
+#  PONIZEJ - na pozniejsze etapy. Odkomentowywac razem z portami.      #
+#=====================================================================#
+
+#---------------------------------------------------------------------#
+#  ETAP 1: wyswietlacz 7-seg. WSZYSTKO AKTYWNE W STANIE NISKIM,       #
+#  lacznie z enable'ami (sekcja 2.12 dokumentacji Numato).            #
+#---------------------------------------------------------------------#
+# NET "seg[0]" LOC = A3 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # a
+# NET "seg[1]" LOC = B4 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # b
+# NET "seg[2]" LOC = A4 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # c
+# NET "seg[3]" LOC = C4 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # d
+# NET "seg[4]" LOC = C5 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # e
+# NET "seg[5]" LOC = D6 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # f
+# NET "seg[6]" LOC = C6 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # g
+# NET "seg[7]" LOC = A5 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;   # kropka
+# NET "en[0]"  LOC = B2 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+# NET "en[1]"  LOC = A2 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+# NET "en[2]"  LOC = B3 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+
+#---------------------------------------------------------------------#
+#  ETAP 5: przelaczniki DIP. Aktywne w stanie NISKIM (zwarcie do masy),#
+#  wiec w RTL trzeba je odwrocic. dp[0] = DP1 na sitodruku.           #
+#---------------------------------------------------------------------#
+# NET "dp[0]" LOC = F17 | IOSTANDARD = LVCMOS33 | PULLUP ;   # DP1 - temp/wilg
+# NET "dp[1]" LOC = F18 | IOSTANDARD = LVCMOS33 | PULLUP ;   # DP2 - C/F
+
+#---------------------------------------------------------------------#
+#  ETAP 4: I2C na zlaczu P6.                                          #
+#                                                                     #
+#  NIE UZYWAC ZLACZA P9 - to bank 1, VCCO = 1.8 V od LPDDR.           #
+#  PULLUP tutaj to tylko zabezpieczenie na czas, gdy piny sa w stanie #
+#  wysokiej impedancji. Rezystory 4.7 kOhm musza byc zewnetrzne.      #
+#---------------------------------------------------------------------#
+# NET "scl" LOC = U7 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW | PULLUP ;   # P6 pin 1
+# NET "sda" LOC = V7 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW | PULLUP ;   # P6 pin 2

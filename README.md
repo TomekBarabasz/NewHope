@@ -208,5 +208,17 @@ def simBackendGhdl : T = {
     }
 ```
 
-### Zamienic AnyFunSuite na TestplanSuite z CommonTestplan.scala
-Druga: I2cPhyTestplan dziedziczy dziś po AnyFunSuite, nie po TestplanSuite z CommonTestplan.scala. Czyli nazwa filter_window_vs_quarter_boundary nie jest weryfikowana względem żadnej listy — dyscyplina „nie da się napisać testu spoza planu" z sekcji 3.2 handoffu jeszcze tu nie obowiązuje. Gdy będziesz przepinał tę suitę na TestplanSuite, ten testpoint trzeba będzie najpierw dopisać do testplan, i to jest dobra okazja, żeby sprawdzić, czy mechanizm działa na czymś, co istnieje naprawdę.
+## wydzielić I2cSim
+Na razie szybki fix w build.sbt aht10 - i2c % "compile->compile;test->test" 
+I2cBusModel, I2cMonitor i I2cSlaveModel to nie są testy. To modele symulacyjne — biblioteka. Fakt, że drugi projekt ich potrzebuje, jest dowodem, że leżą w złej konfiguracji.
+Docelowo osobny projekt na agenta i2c : I2cAgent.scala ląduje w i2c-sim/hw/spinal/main.
+```scala
+lazy val i2cSim = (project in file("i2c-sim"))
+  .dependsOn(vertebra, i2c)          // agent w MAIN tego projektu
+
+lazy val aht10 = (project in file("aht10"))
+  .dependsOn(vertebra, i2c, i2cSim % Test)
+```
+Dodatkowo I2cPhyTestplan też używa agenta, więc chciałbyś napisać i2c.dependsOn(i2cSim % "test->compile"). Tego sbt nie przyjmie — wykrywa cykle na poziomie projektu, niezależnie od konfiguracji, a i2cSim już zależy od i2c.
+
+Wyjście: przenieść testplany i2c razem z agentem do i2cSim/hw/spinal/test. Wtedy i2c zostaje czystym RTL-em bez testów, a i2cSim trzyma agenta w main i wszystkie testplany warstwy I2C w test. Brak cyklu, i przy okazji układ, który odpowiada rzeczywistości — testplany i agent i tak zmieniają się razem.
