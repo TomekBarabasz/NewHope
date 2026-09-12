@@ -204,9 +204,10 @@ object StreamConformance {
   /** stream_valid_deasserted_in_reset */
   def quietDuringReset(cd : ClockDomain, p : StreamPortHandle) : Unit = fork {
     while (true) {
-      cd.waitSampling()
-      if (cd.isResetAsserted) assert(!p.valid.toBoolean,
-        s"${p.name}: valid podniesione w trakcie resetu")
+      cd.waitActiveEdge()        // NIE waitSampling: to filtruje zbocza
+      if (cd.isResetAsserted)    // po isSamplingEnable, wiec warunek
+        assert(!p.valid.toBoolean,// ponizej nigdy nie byl prawdziwy
+          s"${p.name}: valid podniesione w trakcie resetu")
     }
   }
 

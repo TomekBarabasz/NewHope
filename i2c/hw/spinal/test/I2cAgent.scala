@@ -1,12 +1,14 @@
 package newhope.i2c
 
+import spinal.core.ClockDomain
 import spinal.core.sim._
 import scala.collection.mutable
 
 // =====================================================================
-//  AGENT I2C - driver (model magistrali) + monitor/checker + sonda.
+//  AGENT I2C - driver (model magistrali) + monitor/checker + sonda
+//  + programowy slave.
 //
-//  ZMIANA: okno GlitchFilter w monitorze NIE jest juz brane z
+//  ZMIANA 1: okno GlitchFilter w monitorze NIE jest juz brane z
 //  g.filterWindow. Powod jest empiryczny. W FilterSweep `w` jest osia,
 //  wiec razem z DUT-em zmienialo sie okno testbenchu, a GlitchFilter
 //  przelacza stan dopiero po `w` kolejnych roznych probkach. Stan
@@ -17,26 +19,35 @@ import scala.collection.mutable
 //  Okno monitora ma bronic przed glitchami WSTRZYKIWANYMI przez
 //  testbench (host_rx_oversample), a te maja dlugosc znana z testu,
 //  nie z generyka DUT-a. Stad stala.
+//
+//  ZMIANA 2 (warstwa 2): I2cBusModel i I2cMonitor bior teraz
+//  (ClockDomain, I2cPins) zamiast I2cPhyBase, bo ten sam agent obsluguje
+//  I2cMaster - tam piny sa o poziom wyzej. Stare konstruktory zostaly
+//  jako pomocnicze, wiec I2cSmoke i I2cPhyTestplan sa bez zmian.
+//  FilterProbe zostaje przy I2cPhyBase: siega do sygnalow WEWNATRZ PHY.
 // =====================================================================
 
 /** Wired-AND + programowy "slave". */
-class I2cBusModel(dut : I2cPhyBase) {
+class I2cBusModel(cd : ClockDomain, pins : I2cPins) {
+
+  def this(dut : I2cPhyBase) = this(dut.clockDomain, dut.io.pins)
+  def this(dut : I2cMaster)  = this(dut.clockDomain, dut.io.pins)
 
   var sclPull = false
   var sdaPull = false
 
-  def scl : Boolean = dut.io.pins.scl.write.toBoolean && !sclPull
-  def sda : Boolean = dut.io.pins.sda.write.toBoolean && !sdaPull
+  def scl : Boolean = pins.scl.write.toBoolean && !sclPull
+  def sda : Boolean = pins.sda.write.toBoolean && !sdaPull
 
-  def start() : Unit = dut.clockDomain.onSamplings {
-    dut.io.pins.scl.read #= scl
-    dut.io.pins.sda.read #= sda
+  def start() : Unit = cd.onSamplings {
+    pins.scl.read #= scl
+    pins.sda.read #= sda
   }
 
   /** Clock stretching: przytrzymaj SCL przez n cykli zegara systemowego. */
   def stretch(cycles : Int) : Unit = {
     sclPull = true
-    dut.clockDomain.waitSampling(cycles)
+    cd.waitSampling(cycles)
     sclPull = false
   }
 }
@@ -81,10 +92,14 @@ object I2cMonitor {
 //  symulacji przyjezdza opakowany i sweep nie odroznilby "protokol sie
 //  zepsul" od "symulacja sie zawiesila".
 // ---------------------------------------------------------------------
-class I2cMonitor(dut    : I2cPhyBase,
+class I2cMonitor(cd     : ClockDomain,
                  bus    : I2cBusModel,
                  window : Int = I2cMonitor.defaultWindow) {
   import I2cEvent._
+
+  def this(dut : I2cPhyBase, bus : I2cBusModel) = this(dut.clockDomain, bus)
+  def this(dut : I2cPhyBase, bus : I2cBusModel, window : Int) = this(dut.clockDomain, bus, window)
+  def this(dut : I2cMaster,  bus : I2cBusModel) = this(dut.clockDomain, bus)
 
   val events     = mutable.Queue[Event]()
   val violations = mutable.ArrayBuffer[String]()
@@ -104,7 +119,7 @@ class I2cMonitor(dut    : I2cPhyBase,
   var highLen = 0L
   var lowLen  = 0L
 
-  def start() : Unit = dut.clockDomain.onSamplings {
+  def start() : Unit = cd.onSamplings {
     val now = simTime()
     val scl = fScl.update(bus.scl)
     val sda = fSda.update(bus.sda)
@@ -147,6 +162,81 @@ class I2cMonitor(dut    : I2cPhyBase,
     check()
     val got = drain()
     assert(got == expected.toSeq, s"oczekiwano ${expected.toSeq}, dostano $got")
+  }
+
+  /** Po resecie / przerwanej transakcji: zapomnij co bylo. */
+  def forget() : Unit = { drain(); violations.clear() }
+}
+
+// =====================================================================
+//  SLAVE - to, czego brakowalo do testow warstwy 2. PHY testowalo sie
+//  pojedynczymi szarpnieciami SDA (bus.sdaPull), ale przy bajtach
+//  trzeba wystawiac POZIOM NA BIT, i to w odpowiednim momencie.
+//
+//  MODEL: kolejka slotow, jeden slot = jeden bit danych na magistrali
+//  (osiem bitow bajtu + dziewiaty bit ACK). Slot wchodzi na SDA na
+//  opadajacym zboczu SCL, czyli na poczatku ostatniej cwiartki
+//  poprzedniego bitu. Do momentu probkowania w Q2 nastepnego bitu jest
+//  wtedy 2q + falszywy stretching cykli, czyli wiecej niz filterLatency
+//  nawet przy qmin - to ten sam zapas, ktory opisuje naglowek I2cSmoke.
+//
+//  UZBRAJANIE: bezposrednio przed komenda bajtowa (mcmd WRITE/READ).
+//  Miedzy komendami SCL jest NISKO - zbocze, ktore ustawiloby pierwszy
+//  bit, juz bylo - wiec pierwszy slot wchodzi natychmiast przy
+//  uzbrojeniu. Dzieki temu ten sam kod dziala dla pierwszego bajtu po
+//  START, po RESTART i w srodku transakcji, i nikt nie musi liczyc,
+//  ktore zbocze nalezy do ktorego bitu.
+//
+//  Uzbrojenie przy WYSOKIM SCL (magistrala jalowa, przed START) tez
+//  jest poprawne: pierwszy slot wejdzie na zboczu zamykajacym START.
+//
+//  Czego ten model NIE robi: nie dekoduje adresu, nie sledzi kierunku,
+//  nie zna stanu protokolu. Odpowiada tym, co kazal mu test. Prawdziwy
+//  slave to warstwa 3 i osobny komponent.
+// =====================================================================
+class I2cSlaveModel(cd : ClockDomain, pins : I2cPins, bus : I2cBusModel) {
+
+  def this(dut : I2cMaster, bus : I2cBusModel) = this(dut.clockDomain, dut.io.pins, bus)
+
+  private val slots = mutable.Queue[Boolean]()
+
+  /** Open-drain: poziom 1 znaczy "puszczam linie". */
+  private def put(level : Boolean) : Unit = bus.sdaPull = !level
+
+  /** Dopisuje sloty do kolejki. Jesli SCL jest nisko, a kolejka byla
+    * pusta, pierwszy slot wchodzi od razu - patrz UZBRAJANIE. */
+  def drive(levels : Boolean*) : Unit = {
+    val wasEmpty = slots.isEmpty
+    slots ++= levels
+    if (wasEmpty && !pins.scl.write.toBoolean && slots.nonEmpty) put(slots.dequeue())
+  }
+
+  private def bitsOf(v : Int) : Seq[Boolean] =
+    for (i <- 7 to 0 by -1) yield ((v >> i) & 1) != 0
+
+  /** Odpowiedz na READ: osiem bitow MSB-first, potem puszczenie linii,
+    * zeby master mial gdzie wystawic swoj ACK/NACK. */
+  def sendByte(v : Int) : Unit = drive(bitsOf(v) :+ true : _*)
+
+  /** Master pisze bajt: osiem bitow nie dotykamy SDA, w dziewiatym
+    * ACK (sciagniecie do zera) albo NACK (puszczenie). */
+  def writeAck(ack : Boolean = true) : Unit = drive(Seq.fill(8)(true) :+ !ack : _*)
+
+  /** Po przerwanej transakcji: kolejka do kosza, linia puszczona. */
+  def clear() : Unit = { slots.clear(); put(true) }
+
+  def pending : Int = slots.size
+
+  def start() : Unit = fork {
+    var prev = true
+    while (true) {
+      cd.waitSampling()
+      // NIE bus.scl - stretching wstrzykiwany przez testbench nie jest
+      // zboczem bitu, tylko wydluzeniem stanu wysokiego.
+      val now = pins.scl.write.toBoolean
+      if (prev && !now) put(if (slots.nonEmpty) slots.dequeue() else true)
+      prev = now
+    }
   }
 }
 
