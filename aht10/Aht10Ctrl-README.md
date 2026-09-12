@@ -84,15 +84,21 @@ Wszystkie stałe czasowe skrócone: `tickCycles = 4`, czyli
 taktów symulacji. Proporcje między opóźnieniami zostają, więc
 sprawdzane zależności są te same.
 
-## Lista kontrolna na płytce
-
 Etap 4 nie ma jeszcze własnego topu — wyświetlacz dostanie dane dopiero
 w etapie 5. Sensowny podgląd to LED-y podpięte do `io.status`:
 
-- [ ] D2 (`ready`) zapala się po chwili od włączenia — czujnik odpowiada
-- [ ] D1 (`error`) zgaszona
-- [ ] D4 (`calibrated`) zapalona po pierwszym pomiarze
-- [ ] D3 (`busy`) mruga co dwie sekundy — widać cykliczne transakcje
+
+## Diagnostyka na diodach
+| Dioda | Znaczenie |
+|---|---|
+| D1 | `error` — brak ACK, watchdog albo uporczywe busy |
+| D2 | `ready` — po inicjalizacji, czeka na trigger |
+| D3 | `busy` — transakcja albo odliczanie w toku |
+| D4 | `calibrated` — bit CAL z ostatniej ramki |
+| D5 | DP1: wilgotność zamiast temperatury |
+| D6 | DP2: Fahrenheit |
+| D7, D8 | dwa najmłodsze bity kodu stanu FSM |
+
 - [ ] Wyciągnięcie czujnika: D1 zapala się, D2 gaśnie, **układ nie
       zamiera** — to jest test watchdoga na żywo i najważniejszy punkt
       tej listy
