@@ -134,8 +134,12 @@ case class Aht10Demo(clkFrequency : HertzNumber = 100 MHz,
   val switchChanged = sw.io.value =/= RegNext(sw.io.value)
   val sampleDone    = RegNext(ctrl.io.sample.valid) init (False)
   val recompute     = sampleDone || (switchChanged && haveSample)
+  val pending       = RegInit(False)
+  
+  when(recompute)               { pending := True }
+  when(scaler.io.cmd.fire)      { pending := False }
 
-  scaler.io.cmd.valid := recompute
+  scaler.io.cmd.valid := recompute || pending
   scaler.io.cmd.raw   := showHumidity ? rawRh | rawT
   scaler.io.cmd.mode  := showHumidity ? ScalerMode.humidity |
                          (fahrenheit  ? ScalerMode.fahrenheit | ScalerMode.celsius)
