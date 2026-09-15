@@ -49,7 +49,6 @@ abstract class I2cPhySuite(label : String,
   val g = I2cGenerics(clkFrequency = 100 MHz, sclFrequency = 1 MHz)
 
   lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
-    .withFstWave
     .workspaceName(s"${label}_${SimBackend.default.label}")
     .compile { build(g) }
 

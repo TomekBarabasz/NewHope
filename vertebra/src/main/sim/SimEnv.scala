@@ -22,7 +22,9 @@ object SimBackend {
     * rzucic, a nie po cichu wrocic do Verilatora: cicha regresja backendu
     * jest gorsza niz jawny blad. */
   def default : SimBackend =
-    sys.env.get("VERTEBRA_BACKEND").filter(_.nonEmpty).map(parse).getOrElse(Verilator)
+    sys.env.get("VERTEBRA_BACKEND")
+      .orElse(sys.props.get("vertebra.backend"))
+      .filter(_.nonEmpty).map(parse).getOrElse(Ghdl)
 }
 
 object SimBackendOps {
@@ -52,7 +54,7 @@ object SimEnv {
 
   /** MUSI byc def: property bywa ustawiane w runtime (FilterSweep --wave,
     * alias wavesOn w sbt), a val zamrozilby wartosc przy inicjalizacji. */
-  def waves : Boolean = truthy(sys.props.get("vertebra.waves"))
+  def waves : Boolean = truthy(sys.env.get("VERTEBRA_WAVES")) || truthy(sys.props.get("vertebra.waves"))
 
   def apply(spinal : SpinalConfig, workspace : String = "simWorkspace") : SpinalSimConfig = {
     val c = SimConfig.withConfig(spinal).workspacePath(workspace)
