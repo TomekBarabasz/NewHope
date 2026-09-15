@@ -30,10 +30,6 @@ case class DisplayValue() extends Bundle {
 //  odrzucamy ulamek, wynika z formatu. Decyzja o formacie musi wiec
 //  zapasc wczesniej niz konwersja, i dlatego BinToBcd jest wewnatrz
 //  tego komponentu, a nie obok niego.
-//
-//  Gdyby konwerter stal na zewnatrz, ktos musialby przekazac mu
-//  "zaokraglaj albo nie" - czyli i tak podjac te decyzje, tylko
-//  w miejscu, ktore o formacie nic nie wie.
 // =====================================================================
 case class DisplayFormat() extends Component {
 
@@ -52,26 +48,66 @@ case class DisplayFormat() extends Component {
   val isNeg     = io.update.value < 0
   val isBig     = absolute >= 1000
   val dropsFrac = isNeg || isBig
+  val magnitude = dropsFrac ? (absolute + 5) | absolute
 
-  conv.io.cmd.valid   := io.update.valid && !io.update.error
-  conv.io.cmd.payload := dropsFrac ? (absolute + 5) | absolute
+  // -------------------------------------------------------------------
+  //  Bufor jednego zadania.
+  //
+  //  Bez tego io.update trafiajacy w zajety konwerter przepada bez
+  //  sladu - naruszenie kontraktu Stream. W tej konfiguracji zdarza sie
+  //  to raz na dwie sekundy kontra czternascie taktow konwersji, wiec
+  //  praktycznie nigdy. Ale "praktycznie nigdy" opiera sie na
+  //  zalozeniu o czestotliwosci wolajacego, ktore nie jest zapisane
+  //  nigdzie w tym pliku i przestanie byc prawdziwe przy pierwszym
+  //  szybszym uzyciu.
+  // -------------------------------------------------------------------
+  val request    = io.update.valid && !io.update.error
+  val pending    = RegInit(False)
+  val pendingMag = Reg(UInt(13 bits)) init (0)
 
-  // --- zatrzask decyzji o formacie -------------------------------------
-  //  Przed pierwsza probka pokazujemy ---, zeby nie sugerowac, ze zera
-  //  na wyswietlaczu to zmierzona temperatura.
+  when(request) {
+    pendingMag := magnitude
+    pending    := !conv.io.cmd.ready      // nie wszedl teraz -> wejdzie pozniej
+  } elsewhen (conv.io.cmd.fire) {
+    pending := False
+  }
+
+  conv.io.cmd.valid   := request || pending
+  conv.io.cmd.payload := request ? magnitude | pendingMag
+
+  // -------------------------------------------------------------------
+  //  Zatrzask wyniku i flag formatu.
+  //
+  //  Flagi przepisujemy dopiero na rsp.valid, RAZEM z cyframi. Gdyby
+  //  ustawialy sie od razu na io.update, przez czternascie taktow
+  //  konwersji nowy format opisywalby stare cyfry - np. "-25" zamiast
+  //  "25.0" w trakcie przejscia przez zero. Przy odswiezaniu 1 kHz to
+  //  niewidoczne, ale to znowu argument z predkosci, a nie z projektu.
+  //
+  //  Blad jest wyjatkiem: nie uruchamia konwersji, wiec musi zadzialac
+  //  natychmiast. Przed pierwsza probka tez pokazujemy kreski, zeby
+  //  zera nie wygladaly jak zmierzone zero stopni.
+  // -------------------------------------------------------------------
+  val negPend = Reg(Bool()) init (False)
+  val bigPend = Reg(Bool()) init (False)
+
+  when(io.update.valid) {
+    negPend := isNeg
+    bigPend := isBig
+  }
+
   val negReg   = Reg(Bool()) init (False)
   val bigReg   = Reg(Bool()) init (False)
   val errorReg = Reg(Bool()) init (True)
+  val bcd      = Vec.fill(4)(Reg(UInt(4 bits)) init (0))
 
-  when(io.update.valid) {
-    negReg   := isNeg
-    bigReg   := isBig
-    errorReg := io.update.error
-  }
+  when(io.update.valid && io.update.error) { errorReg := True }
 
-  val bcd = Vec.fill(4)(Reg(UInt(4 bits)) init (0))
   when(conv.io.rsp.valid) {
     for (i <- 0 until 4) bcd(i) := conv.io.rsp.payload(i)
+    negReg   := negPend
+    bigReg   := bigPend
+    errorReg := False
   }
 
   // Wartosc ujemna nie zmiesci sie z trzema cyframi calkowitymi.
