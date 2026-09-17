@@ -93,6 +93,10 @@ lazy val aht10 = (project in file("aht10"))
   .dependsOn(vertebra, i2c % "compile->compile;test->test")
   .settings(hwSettings)
 
+lazy val mcb = (project in file("mcb"))
+  .dependsOn(vertebra)
+  .settings(hwSettings)
+
 lazy val root = (project in file("."))
   .aggregate(vertebra, asyncfifo, i2c)
   .settings(publish / skip := true)
