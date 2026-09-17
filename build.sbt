@@ -97,6 +97,10 @@ lazy val sandbox = (project in file("sandbox"))
   .dependsOn(vertebra)
   .settings(hwSettings)
 
+lazy val mcb = (project in file("mcb"))
+  .dependsOn(vertebra)
+  .settings(hwSettings)
+
 lazy val root = (project in file("."))
   .aggregate(vertebra, asyncfifo, i2c, aht10, sandbox)
   .settings(publish / skip := true)
