@@ -2,6 +2,7 @@ package newhope.aht10
 
 import spinal.core._
 import spinal.lib._
+import newhope.mimas_v2._
 
 // =====================================================================
 //  ETAP 3 - ScalerDsp na plytce.

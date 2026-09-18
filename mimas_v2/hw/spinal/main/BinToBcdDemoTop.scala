@@ -1,7 +1,8 @@
-package newhope.aht10
+package newhope.mimas_v2
 
 import spinal.core._
 import spinal.lib._
+import newhope.mimas_v2._
 
 // =====================================================================
 //  ETAP 2 - BinToBcd w calym torze.

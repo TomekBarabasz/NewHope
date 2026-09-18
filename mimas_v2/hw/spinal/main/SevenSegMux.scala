@@ -1,4 +1,4 @@
-package newhope.aht10
+package newhope.mimas_v2
 
 import spinal.core._
 import spinal.lib._
@@ -88,7 +88,9 @@ case class SevenSegMux(clkFrequency : HertzNumber = 100 MHz,
 
   val io = new Bundle {
     /** Indeks 0 = cyfra sterowana przez en[0]. Ktora to fizycznie -
-      * do potwierdzenia na plytce, dokumentacja Numato tego nie mowi. */
+      * do potwierdzenia na plytce, dokumentacja Numato :
+      en[0] = B3 lewa | en[1] = A2 środek | en[2] = B2 prawa
+       */
     val digits = in  Vec(SevenSegDigit(), 3)
     val seg    = out Bits (8 bits)
     val en     = out Bits (3 bits)

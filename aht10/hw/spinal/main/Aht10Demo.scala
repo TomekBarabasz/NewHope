@@ -4,6 +4,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.io.InOutWrapper
 import newhope.i2c._
+import newhope.mimas_v2._
 
 // =====================================================================
 //  Odmierzanie okresu pomiaru.

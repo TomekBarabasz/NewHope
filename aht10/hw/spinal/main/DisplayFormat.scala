@@ -2,6 +2,7 @@ package newhope.aht10
 
 import spinal.core._
 import spinal.lib._
+import newhope.mimas_v2._
 
 case class DisplayValue() extends Bundle {
   /** Wartosc razy 10, ze znakiem. */

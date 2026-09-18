@@ -89,8 +89,12 @@ lazy val i2c = (project in file("i2c"))
   .dependsOn(vertebra)
   .settings(hwSettings)
 
+lazy val mimas_v2 = (project in file("mimas_v2"))
+  .dependsOn(vertebra)
+  .settings(hwSettings)
+
 lazy val aht10 = (project in file("aht10"))
-  .dependsOn(vertebra, i2c % "compile->compile;test->test")
+  .dependsOn(vertebra, i2c % "compile->compile;test->test", mimas_v2)
   .settings(hwSettings)
 
 lazy val sandbox = (project in file("sandbox"))
@@ -98,7 +102,7 @@ lazy val sandbox = (project in file("sandbox"))
   .settings(hwSettings)
 
 lazy val mcb = (project in file("mcb"))
-  .dependsOn(vertebra)
+  .dependsOn(vertebra, mimas_v2)
   .settings(hwSettings)
 
 lazy val root = (project in file("."))

@@ -1,4 +1,4 @@
-package newhope.aht10
+package newhope.mimas_v2
 
 import spinal.core._
 

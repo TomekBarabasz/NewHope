@@ -1,10 +1,11 @@
-package newhope.aht10
+package newhope.mimas_v2
 
 import spinal.core._
 import spinal.core.sim._
 import scala.collection.mutable
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
+import newhpe.mimas_v2._
 
 // =====================================================================
 //  Testplan BinToBcd.
