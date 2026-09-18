@@ -31,7 +31,7 @@ case class MigConfig(
     // clock period :  8000 -> 125MHz
     // clock period :  6666 -> 150MHz
     // clock period :  6000 -> 166MHz
-    memClkPeriod  : Int  = 6000,  //166MHz
+    memClkPeriod  : Int  = 6000,
     uiClkDivider  : Int  = 4,
     countWidth    : Int  = 7,
     addrWidth     : Int  = 30
@@ -119,5 +119,18 @@ case class MigPort(c: MigConfig) extends Bundle with IMasterSlave {
   override def asMaster(): Unit = {
     master(cmd, wr)
     slave(rd)
+  }
+
+  /**
+   * Podlacza mastera do tej strony portu. Uzywane od strony MCB:
+   *   mcb.port.driveFrom(engine.io.port)
+   *
+   * Nie uzywamy tu `<>`, bo strona MCB to zwykly bundle bez kierunkow
+   * (siedzi wewnatrz modulu), wiec SpinalHDL nie mialby jak ich wywnioskowac.
+   */
+  def driveFrom(m: MigPort): Unit = {
+    this.cmd << m.cmd
+    this.wr  << m.wr
+    m.rd     << this.rd
   }
 }
