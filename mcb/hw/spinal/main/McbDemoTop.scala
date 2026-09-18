@@ -157,7 +157,11 @@ class McbDemoTop(
 object McbDemoTopVerilog extends App {
 
   val cfg32  = MigConfig(dataWidth = 32)    // Config-1, port 32 b  -> 100 MB/s
-  val cfg128 = MigConfig(dataWidth = 128)   // Config-5, port 128 b -> 400 MB/s
+  // clock period : 10000 -> 100MHz
+  // clock period :  8000 -> 125MHz
+  // clock period :  6666 -> 150MHz
+  // clock period :  6000 -> 166MHz
+  val cfg128 = MigConfig(dataWidth = 128, memClkPeriod = 6000)   // Config-5, port 128 b -> 400 MB/s + 125MHz
 
   /**
    * Benchmarki sa tak dobrane, zeby na KAZDEJ szerokosci portu przerzucic
@@ -177,10 +181,14 @@ object McbDemoTopVerilog extends App {
     )
   }
 
-  /** Regresja: krok 2 kB rusza banki i wiersze, 200 ms sprawdza odswiezanie. */
+  /**
+   * Regresja: krok 2 kB rusza banki i wiersze, przerwa sprawdza odswiezanie.
+   * Przerwa liczona Z ZEGARA, nie wpisana na sztywno - przy zmianie
+   * czestotliwosci pamieci zostaje 200 ms, a nie zmienia sie razem z nia.
+   */
   def regression(cfg: MigConfig) = new McbDemoTop(
     c = cfg, burstLen = 1, burstCount = 4096, stride = 2048,
-    sweepColumns = true, holdCycles = 5000000, errIdxWidth = 13
+    sweepColumns = true, holdCycles = (cfg.uiClkHz / 5).toInt, errIdxWidth = 13
   )
 
   /** Bisekcja z poprzedniego kroku, na dowolnej szerokosci. */
@@ -214,7 +222,10 @@ object McbDemoTopVerilog extends App {
   println(s"""
     |tryb            : $mode  ->  rtl/$mode/McbDemoTop.v
     |szerokosc portu : ${cfg.dataWidth} b (${cfg.bytesPerWord} B/slowo)
-    |zegar UI        : ${cfg.uiClkHz / 1000000} MHz
+    |zegar pamieci   : ${cfg.memClkHz / 1000000} MHz (okres ${cfg.memClkPeriod} ps)
+    |zegar UI        : ${cfg.uiClkHz / 1000000} MHz  <- ZALOZENIE memclk/${cfg.uiClkDivider}!
+    |                  sprawdz C3_CLKOUT2_DIVIDE w infrastructure.v
+    |                  i wyprowadzone ograniczenia w .twr
     |sufit portu     : ${cfg.portPeakBytesPerSec / 1000000} MB/s
     |szczyt pamieci  : ${cfg.dramPeakBytesPerSec / 1000000} MB/s
     |na przebieg     : ${bytesPerPass / 1024} KiB

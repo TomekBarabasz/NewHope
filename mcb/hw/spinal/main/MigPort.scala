@@ -27,7 +27,11 @@ case class MigConfig(
     colBits       : Int  = 10,
     memAddrWidth  : Int  = 13,
     bankAddrWidth : Int  = 2,
-    memClkPeriod  : Int  = 10000,
+    // clock period : 10000 -> 100MHz
+    // clock period :  8000 -> 125MHz
+    // clock period :  6666 -> 150MHz
+    // clock period :  6000 -> 166MHz
+    memClkPeriod  : Int  = 6000,  //166MHz
     uiClkDivider  : Int  = 4,
     countWidth    : Int  = 7,
     addrWidth     : Int  = 30

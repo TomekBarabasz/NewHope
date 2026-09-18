@@ -145,8 +145,23 @@ module s6_lpddr #
    localparam C3_CLKOUT1_DIVIDE       = 2;       
    localparam C3_CLKOUT2_DIVIDE       = 16;       
    localparam C3_CLKOUT3_DIVIDE       = 8;       
-   localparam C3_CLKFBOUT_MULT        = 4;       
-   localparam C3_DIVCLK_DIVIDE        = 1;       
+
+   //memClkPeriod = 10000
+   //localparam C3_CLKFBOUT_MULT        = 4;     dla 100MHz
+   //localparam C3_DIVCLK_DIVIDE        = 1;     dla 100MHz
+   
+   //memClkPeriod = 8000
+   //localparam C3_CLKFBOUT_MULT        = 5;     //dla 125MHz
+   //localparam C3_DIVCLK_DIVIDE        = 1;     //dla 125MHz
+   
+   //memClkPeriod = 6666
+   //localparam C3_CLKFBOUT_MULT        = 6;     //dla 150MHz
+   //localparam C3_DIVCLK_DIVIDE        = 1;     //dla 150MHz
+   
+   //memClkPeriod = 6000
+   localparam C3_CLKFBOUT_MULT        = 20;      //dla 166MHz
+   localparam C3_DIVCLK_DIVIDE        = 3;       //dla 166MHz
+
    localparam C3_ARB_ALGORITHM        = 0;       
    localparam C3_ARB_NUM_TIME_SLOTS   = 12;       
    localparam C3_ARB_TIME_SLOT_0      = 3'o0;       
