@@ -33,7 +33,7 @@ import spinal.lib.fsm._
  *                        ze dioda swieci, potem wroc do false. Test, ktory zawsze
  *                        przechodzi, wyglada identycznie jak test poprawny.
  */
-class McbDemoTop(
+class McbDemoTopV1(
     wordCount       : Int     = 4096,
     retentionCycles : Int     = 5000000,
     injectFault     : Boolean = false,
@@ -247,7 +247,7 @@ object MigTopVerilog extends App {
       resetActiveLevel = HIGH
     )
   ).generateVerilog(
-    new McbDemoTop(
+    new McbDemoTopV1(
       wordCount       = 4096,
       retentionCycles = 5000000,   // 100 ms @ 50 MHz
       injectFault     = false      // <-- ustaw true na jeden build, zeby sprawdzic komparator
