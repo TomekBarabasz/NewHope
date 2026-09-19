@@ -87,9 +87,10 @@ case class SevenSegMux(clkFrequency : HertzNumber = 100 MHz,
                        blankCycles  : Int         = 64) extends Component {
 
   val io = new Bundle {
-    /** Indeks 0 = cyfra sterowana przez en[0]. Ktora to fizycznie -
-      * do potwierdzenia na plytce, dokumentacja Numato :
-      en[0] = B3 lewa | en[1] = A2 środek | en[2] = B2 prawa
+    /** położenie cyfr
+      en[0] = najstarsza (pierwsza od lewej)
+      en[1] = środek 
+      en[2] = najmłodsza (piersza od prawej)
        */
     val digits = in  Vec(SevenSegDigit(), 3)
     val seg    = out Bits (8 bits)
@@ -118,5 +119,4 @@ case class SevenSegMux(clkFrequency : HertzNumber = 100 MHz,
   // Jedyne miejsce z inwersja. Wszystko powyzej jest aktywne wysokim.
   io.seg := ~(lit ? shown            | B(0, 8 bits))
   io.en  := ~(lit ? UIntToOh(index, 3) | B(0, 3 bits))
-  //io.en := ~(lit ? (B"3'b001" |<< index) | B(0, 3 bits))
 }
