@@ -22,9 +22,11 @@ import spinal.lib._
 //  (patrz I2sCodecModel.minHalfDiv). Na FPGA zostaje rejestr w IOB.
 // =====================================================================
 
-case class I2sFrame(g : I2sGenerics) extends Bundle {
-  val left  = Bits(g.width bits)
-  val right = Bits(g.width bits)
+// Szerokosc zamiast I2sGenerics: ten sam typ ramki uzywa I2sSlave, ktory
+// nie ma dzielnika ani fs (zegar dostaje z magistrali).
+case class I2sFrame(width : Int) extends Bundle {
+  val left  = Bits(width bits)
+  val right = Bits(width bits)
 }
 
 case class I2sPins() extends Bundle with IMasterSlave {
@@ -38,8 +40,8 @@ case class I2sMaster(g : I2sGenerics) extends Component {
   require(g.slotWidth >= 2, "slotWidth >= 2 (opoznienie o bit potrzebuje dwoch pozycji)")
 
   val io = new Bundle {
-    val tx       = slave(Stream(I2sFrame(g)))
-    val rx       = master(Flow(I2sFrame(g)))
+    val tx       = slave(Stream(I2sFrame(g.width)))
+    val rx       = master(Flow(I2sFrame(g.width)))
     val underrun = out Bool()
     val pins     = master(I2sPins())
   }
@@ -78,9 +80,9 @@ case class I2sMaster(g : I2sGenerics) extends Component {
   //  cyklu laduje sie nowy - stad opoznienie o jeden bit bez
   //  dodatkowego licznika.
   // -------------------------------------------------------------------
-  val buf      = Reg(I2sFrame(g))
+  val buf      = Reg(I2sFrame(g.width))
   val bufValid = Reg(Bool()) init False
-  val cur      = Reg(I2sFrame(g))
+  val cur      = Reg(I2sFrame(g.width))
   val txSh     = Reg(Bits(S bits)) init 0
 
   val nextFrame = Mux(bufValid, buf, buf.getZero)
@@ -118,7 +120,7 @@ case class I2sMaster(g : I2sGenerics) extends Component {
   val frameSeen = Reg(Bool()) init False    // byla juz prawdziwa granica ramki
   val leftValid = Reg(Bool()) init False    // rxLeft pochodzi z pelnego lewego slotu
   val rxValid   = Reg(Bool()) init False
-  val rxData    = Reg(I2sFrame(g))
+  val rxData    = Reg(I2sFrame(g.width))
 
   val full = rxSh ## io.pins.sdi                          // S bitow, MSB pierwszy
   val word = full(S - 1 downto S - g.width)
