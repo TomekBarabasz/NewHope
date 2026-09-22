@@ -193,6 +193,29 @@ w oknie niepewności.
 
 przebiegi w simWorkspace/CdcInjectDemo
 
+# MimasV2
+## MCB
+zmierzone na bench128 368 MiB/s => 385,9 MB/s
+
+| Port | Zmierzone | Sufit portu | Wykorzystanie | VS pamięć (400 MB/s) |
+|---|---:|---:|---:|---:|
+| 32 B | 100,0 MB/s | 100 MB/s | 99,9% | 25% |
+| 128 B | 385,9 MB/s | 400 MB/s | **96,5%** | **96,5%** |
+
+Skąd te brakujące 3,5%
+
+Przy  32 bitach pamięć miała trzykrotny zapas i chowała za nim całą aktywację wierszy. 
+Przy 128 bitach zapasu nie ma i narzut wychodzi na wierzch.
+
+Z grubsza rozkłada się tak. Odświeżanie to około 1% — tRFC rzędu 72 ns co tREFI 7,8 µs. Reszta, jakieś 2,5%, to zarządzanie wierszami: przy kroku 512 B co cztery bursty przekraczasz granicę 2 kB, czyli przechodzisz do następnego banku, a co szesnaście potrzebujesz nowego wiersza z precharge i activate.
+
+## UART
+W oryginalnym mimas_v2.ucf z Numato są zamienione piny tx i rx - poprawne przypisanie to:
+NET "uart_txd"  LOC = B8      |  IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+NET "uart_rxd"  LOC = A8      |  IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+
+## DSP48A1
+Działa - patrz aht10\hw\spinal\main\ScalerDspDemoTop.scala
 
 # Todo
 
@@ -223,18 +246,3 @@ Dodatkowo I2cPhyTestplan też używa agenta, więc chciałbyś napisać i2c.depe
 
 Wyjście: przenieść testplany i2c razem z agentem do i2cSim/hw/spinal/test. Wtedy i2c zostaje czystym RTL-em bez testów, a i2cSim trzyma agenta w main i wszystkie testplany warstwy I2C w test. Brak cyklu, i przy okazji układ, który odpowiada rzeczywistości — testplany i agent i tak zmieniają się razem.
 
-
-# MCB
-zmierzone na bench128 368 MiB/s => 385,9 MB/s
-
-| Port | Zmierzone | Sufit portu | Wykorzystanie | VS pamięć (400 MB/s) |
-|---|---:|---:|---:|---:|
-| 32 B | 100,0 MB/s | 100 MB/s | 99,9% | 25% |
-| 128 B | 385,9 MB/s | 400 MB/s | **96,5%** | **96,5%** |
-
-Skąd te brakujące 3,5%
-
-Przy  32 bitach pamięć miała trzykrotny zapas i chowała za nim całą aktywację wierszy. 
-Przy 128 bitach zapasu nie ma i narzut wychodzi na wierzch.
-
-Z grubsza rozkłada się tak. Odświeżanie to około 1% — tRFC rzędu 72 ns co tREFI 7,8 µs. Reszta, jakieś 2,5%, to zarządzanie wierszami: przy kroku 512 B co cztery bursty przekraczasz granicę 2 kB, czyli przechodzisz do następnego banku, a co szesnaście potrzebujesz nowego wiersza z precharge i activate.

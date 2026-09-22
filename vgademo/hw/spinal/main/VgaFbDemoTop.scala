@@ -164,7 +164,7 @@ class VgaFbDemoTop(c: VgaFbConfig) extends Component {
  */
 object VgaFbDemoTopVerilog extends App {
   val scale = if (args.contains("full")) 1 else 2
-  val baud  = args.find(_.forall(_.isDigit)).map(_.toInt).getOrElse(19200)
+  val baud  = args.find(_.forall(_.isDigit)).map(_.toInt).getOrElse(115200)
 
   val cfg = VgaFbConfig(
     mig        = MigConfig(dataWidth = 128, memClkPeriod = 10000),

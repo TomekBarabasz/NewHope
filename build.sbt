@@ -109,6 +109,10 @@ lazy val vgademo = (project in file("vgademo"))
   .dependsOn(vertebra, mimas_v2, mcb)
   .settings(hwSettings)
 
+lazy val uartdemo = (project in file("uart_demo"))
+  .dependsOn(vertebra, mimas_v2)
+  .settings(hwSettings)
+
 lazy val root = (project in file("."))
   .aggregate(vertebra, asyncfifo, i2c, aht10, sandbox)
   .settings(publish / skip := true)
