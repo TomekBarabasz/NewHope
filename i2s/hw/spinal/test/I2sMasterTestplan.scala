@@ -687,8 +687,8 @@ class I2sMasterTestplan extends TestplanSuite {
     }
 
     // Beyond Circuits t18 + Microchip UG: odbiornik nie zna dlugosci slowa
-    // nadajnika. MSB-first sprawia, ze dluzsze slowo traci LSB-y, a krotsze
-    // dostaje zera na mlodszych pozycjach (kodek wypelnia padding zerami).
+    // nadajnika. Oczekiwanie liczy I2sFormat.transfer - ta sama regula co
+    // w scoreboardzie slave'a i w kontrakcie vertebra-hil.
     scenario("i2s_rx_word_length_mismatch") { e =>
       val rng = new Random(23)
 
@@ -700,8 +700,8 @@ class I2sMasterTestplan extends TestplanSuite {
         e.waitFrames(fs.size)
         e.settle()
 
-        def conv(v : Long) : Long =
-          if (cw >= g.width) v >> (cw - g.width) else v << (g.width - cw)
+        def conv(v : Long) : Long = I2sFormat.transfer(v, cw, g.slotWidth, g.width)
+
         val n   = e.codec.log.lastIndexWhere(_.isDefined) + 1
         val exp = e.codec.log.take(n).map(_.getOrElse(Silence))
                    .map(f => Frame(conv(f.left), conv(f.right))).toSeq

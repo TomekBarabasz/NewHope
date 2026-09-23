@@ -84,7 +84,7 @@ Każdy z trzech programów ma swój katalog. Czwarty katalog, `contract/`, jest 
 | `vertebra-hil/host/` | orkiestrator: scenariusze, `cfg`/`start`/`stat`, ocena wyniku, raport `TestplanSuite` (§8) | PC (JVM) | sbt, projekt `hil` | `HilLink`, `HilSuite` wspólne, suity `hw_*` per IP |
 | `vertebra-hil/fpga/` | harness: most UART → rejestry, generator/checker, DUT-y (§6) | Mimas V2 (bitstream) | sbt, projekt `hilFpga` → Verilog → ISE → `.bin` | rdzeń wspólny, `I2sHarness` per IP |
 | `vertebra-hil/esp32/` | firmware partnera: komendy tekstowe, wzorzec, rola I2S (§7) | ESP32-S3 | ESP-IDF (`idf.py build flash`), poza sbt | `hil_cmd` wspólny, rola per IP |
-| `vertebra-hil/contract/` | specyfikacja wzorca i komend, wektory testowe (CSV) | — | — | wspólne + sekcja per IP |
+| `vertebra-hil/contract/` | specyfikacja komend (wspólna), wzorzec i wektory testowe (CSV) per IP w podkatalogach | — | — | `commands.md` wspólny, `i2s/`, `i2c/` per IP |
 
 Cała logika testów siedzi w `host/`. Firmware ESP32 i harness FPGA znają tylko zestaw komend z §5 i nic nie wiedzą o scenariuszach.
 
@@ -101,12 +101,14 @@ NewHope/
   vertebra/                         biblioteka weryfikacji, bez zmian
   i2s/
   vertebra-hil/
-    contract/                       pattern.md, commands.md, vectors/ (etap 1)
+    contract/                       commands.md: transport, ramki, wspólne rejestry (etap 1)
+      i2s/                          pattern.md, commands.md (cfg, ip_id, blok 0x100), vectors/ (etap 1)
+      i2c/                          jw. dla I2C, później
     fpga/                           sbt: hilFpga (hwSettings)
       hw/spinal/main/               Config, HilEchoTop (etap 0); HilUartBridge, HilCoreRegs... (etap 2)
-      hw/spinal/main/i2s/           I2sHilRegs, I2sPatternGen/Check, I2sHarness
+      hw/spinal/main/i2s/           I2sPattern, I2sCheckerModel, I2sVectors (etap 1); I2sHilRegs, I2sPatternGen/Check, I2sHarness (etap 2)
       hw/spinal/test/               HilEchoTopTestplan (etap 0)
-      hw/spinal/test/i2s/           I2sHarnessTestplan
+      hw/spinal/test/i2s/           I2sContractTestplan (etap 1), I2sHarnessTestplan
       hw/gen/        (gitignore)    Verilog ze Spinala
       hw/ise/                       .ucf, skrypt xtclsh / Makefile
       hw/build/      (gitignore)    .bit / .bin
@@ -133,7 +135,7 @@ NewHope/
 
 ```scala
 lazy val hilFpga = (project in file("vertebra-hil/fpga"))
-  .dependsOn(vertebra, mimas_v2)        // + i2s w etapie 2
+  .dependsOn(vertebra, mimas_v2, i2s, i2c)
   .settings(hwSettings, name := "vertebra-hil-fpga")
 
 lazy val hil = (project in file("vertebra-hil/host"))
@@ -159,7 +161,7 @@ Oba podprojekty są w `root.aggregate`. Bez stanowiska testy `hw_*` są *cancele
 **Konsekwencje dla budowania.**
 
 - `Config.spinal` generuje do `hw/gen` względem katalogu roboczego. Przy forku z `forkSettings` Verilog harnessu trafia sam do `vertebra-hil/fpga/hw/gen`, a `simClean` działa bez zmian.
-- `hilFpga` ma własny `newhope.vertebra.hil.Config` w `fpga/hw/spinal/main/`, jak każdy moduł sprzętowy (`TESTING-STRATEGY.md` §2.3). `HilEchoTop` go używa, więc `hilFpga` nie zależy od `i2c`. W etapie 2 dochodzi zależność od `i2s` z jego `newhope.i2s.Config`; pakiety są różne, więc nazwy się nie zderzają. Host nie ma `Config`: nie generuje Veriloga ani nie symuluje.
+- `hilFpga` ma własny `newhope.vertebra.hil.Config` w `fpga/hw/spinal/main/`, jak każdy moduł sprzętowy (`TESTING-STRATEGY.md` §2.3). `HilEchoTop` używa tego, a nie `Config` z `i2c`. Od etapu 1 `hilFpga` zależy od `i2s` (kontrakt używa `newhope.i2s.I2sFormat.transfer`), a w etapie 2 harness instancjonuje jego DUT-y; `newhope.i2s.Config` ma inny pakiet, więc nazwy się nie zderzają. Host nie ma `Config`: nie generuje Veriloga ani nie symuluje.
 
 Do `.gitignore`: `vertebra-hil/fpga/hw/gen/`, `vertebra-hil/fpga/hw/build/`, `vertebra-hil/esp32/build/`, `vertebra-hil/esp32/sdkconfig`.
 
@@ -172,33 +174,38 @@ Słowo o szerokości W dla ramki n i kanału c (0 = L, 1 = R), od MSB:
 | Bity | Pole | Po co |
 | --- | --- | --- |
 | W-1 | `c` | zamiana kanałów widoczna nawet po obcięciu słowa; ramka nigdy nie jest ciszą (R ≠ 0) |
-| kolejne S bitów | `n mod 2^S` | kolejność; S = min(8, W/2 - 1), czyli 3 dla W=8, 7 dla W=16, 8 dla W≥24 |
-| reszta, do LSB | młodsze bity `h(n, c, seed)` | przesunięcie o bit i przekłamania w młodszych bitach |
+| kolejne S bitów | `seq = n mod 2^S` | kolejność; S = min(8, W/2 - 1), czyli 3 dla W=8, 7 dla W=16, 8 dla W≥18 |
+| reszta, do LSB | młodsze bity `h(seq, c, seed)` | przesunięcie o bit i przekłamania w młodszych bitach |
 
 Seq i kanał są w najstarszych bitach celowo: MSB-first przenosi je przez każdą zmianę długości słowa (`word_length_mismatch`, padding).
 
-Hash to jeden krok xorshift32 na `x = ((n << 1) | c) ^ seed`: `x ^= x << 13; x ^= x >> 17; x ^= x << 5`. Same XOR-y, więc na FPGA to kombinacyjne okablowanie bez DSP.
+Hash to jeden krok xorshift32 na `x = ((seq << 1) | c) ^ seed` w arytmetyce u32 z logicznym przesunięciem: `x ^= x << 13; x ^= x >> 17; x ^= x << 5`. Same XOR-y, więc na FPGA to kombinacyjne okablowanie bez DSP. Hash zależy od `seq`, a nie od pełnego `n`, bo odbiorca, który zaczyna słuchać w trakcie biegu, zna tylko `n mod 2^S` i musi z tego policzyć całe słowo. Ceną jest niewidoczne zgubienie dokładnie k·2^S ramek z rzędu. Dokładna specyfikacja jest w `contract/i2s/pattern.md`; ten rozdział ją streszcza.
 
-Odbiorca nie porównuje surowego słowa, tylko `transfer(wzorzec_Wtx, Wtx, slot, Wrx)`: tę samą funkcję, którą liczy scoreboard w symulacji (`I2sBusMaster.transfer`). Parametry nadawcy dostaje w `cfg`.
+Odbiorca nie porównuje surowego słowa, tylko `transfer(wzorzec_Wtx, Wtx, slot, Wrx)`: tę samą funkcję, którą liczy scoreboard w symulacji (`newhope.i2s.I2sFormat.transfer`, przeniesioną z `I2sBusMaster` w etapie 1). Parametry nadawcy dostaje w `cfg`.
 
-Algorytm checkera (identyczny w FPGA i w ESP32):
+Algorytm checkera (identyczny w FPGA i w ESP32; tabela przejść w `contract/i2s/pattern.md`, referencja `I2sCheckerModel`):
 
-1. **Lock**: pierwsza ramka, w której oba kanały są dokładnie równe oczekiwanym dla `n` odczytanego z pola seq, potwierdzona przez 2 kolejne ramki. Wcześniejsze ramki (zera z pustego DMA, ramka częściowa) się nie liczą.
+1. **Lock**: pierwsza ramka, w której oba kanały są dokładnie równe oczekiwanym dla `n` odczytanego z pola seq, potwierdzona przez 2 kolejne ramki. Wcześniejsze ramki (zera z pustego DMA, ramka częściowa) się nie liczą; cisza w trakcie potwierdzania nie przerywa ciągu.
 2. Po locku oczekiwana jest ramka `n + 1`. Cisza (oba kanały 0) to luka i nie zużywa numeru: generator zwiększa `n` tylko przy handshake'u.
-3. Niezgodność: licznik błędów, zapis pierwszego błędu (numer ramki, got, exp), próba ponownego locka. Relock liczony osobno: oznacza zgubioną albo zdublowaną ramkę.
+3. Niezgodność: licznik błędów i zapis pierwszego błędu (numer ramki, got, exp). Jeśli błędna ramka jest poprawną ramką wzorca z innym numerem, checker od razu przestawia się na nią i liczy relock: to zgubiona albo zdublowana ramka. W przeciwnym razie ramka jest przekłamana i zużywa numer.
 
 Liczniki checkera: `frames` (zgodne), `bad`, `gaps`, `relocks`, `lock_at`, `first_err`. Scenariusz na PC decyduje, które wartości są dopuszczalne: `gaps > 0` jest błędem przy ciągłym zasilaniu, a oczekiwanym wynikiem w `hw_tx_underrun`.
 
-Wektory testowe w `contract/vectors/`:
+Wektory testowe w `contract/i2s/vectors/`:
 
 - `pattern.csv`: `seed, n, c, W, word` dla W ∈ {8, 16, 24, 32}, w tym n przechodzące przez zawinięcie pola seq.
 - `transfer.csv`: `word, Wtx, slot, Wrx, wynik`, w tym oba kierunki niedopasowania długości.
+- `checker_cases.csv`, `checker_frames.csv`: 14 strumieni ramek (czysty, śmieci przed lockiem, luki, drop, dup, zamiana kanałów, przekłamany bit, przesunięcie o bit, zawinięcie u32, niedopasowania długości, brak locka) i oczekiwane liczniki.
 
-Te same pliki czytają: test jednostkowy Scali, test generatora Spinal w symulacji i test na ESP32 uruchamiany komendą `selftest`.
+Te same pliki czytają: `I2sContractTestplan` (sprawdza, że pliki w repo są aktualne), test generatora i checkera Spinal w symulacji i test na ESP32 uruchamiany komendą `selftest`.
+
+Warunek sprawdzalności: odbiorca musi widzieć kanał i całe pole seq, czyli `min(Wtx, slot, Wrx) ≥ 1 + S(Wtx)`. Połączenie, które go nie spełnia (np. 32 → 8), checker odrzuca już w `cfg`.
 
 Znane ograniczenie: gdy odbiorca widzi tylko najstarsze bity (słowo o połowę krótsze), hash zostaje obcięty i przesunięcie o bit wykrywa już tylko pole seq. Dla tych przypadków granicę wykrywalności wypisuje test `hw_param_bounds` (§8).
 
 ## 5. Kontrakt: komendy
+
+Specyfikacja: `contract/commands.md` (część wspólna dla wszystkich IP) i `contract/<ip>/commands.md` (klucze `cfg`, `ip_id`, blok `0x100`–`0x1FF`). Ten rozdział ją streszcza.
 
 Na kablu są dwa protokoły, bo tak jest prościej: ESP32 mówi tekstem, FPGA binarnym dostępem do rejestrów. Na PC oba są schowane za jednym interfejsem `HilDevice` (§8), więc scenariusz ich nie rozróżnia.
 
@@ -307,7 +314,7 @@ ESP-IDF 5.x i nowy driver `i2s_std` w trybie Philips. Firmware nie zna scenarius
 | Moduł | Wspólny / per IP | Opis |
 | --- | --- | --- |
 | `components/hil_cmd` | wspólny | USB-CDC (natywne USB S3), parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami |
-| `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4; wektory z `contract/` wbudowane przez `EMBED_FILES` |
+| `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4; wektory z `contract/i2s/vectors/` wbudowane przez `EMBED_FILES` |
 | `main/i2s_role.c` | per IP | konfiguracja kanału z `cfg`, task TX (wzorzec → `i2s_channel_write`), task RX (`i2s_channel_read` → checker) |
 
 Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start` / `stop` / `stat`. Dla I2C dojdzie `main/i2c_role.c`, a `hil_cmd` zostaje bez zmian.
@@ -405,7 +412,7 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 | # | Etap | Zakres | Kryterium ukończenia |
 | --- | --- | --- | --- |
 | 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hilFpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-CDC; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-CDC na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
-| 1 | Kontrakt | specyfikacja wzorca i `transfer()`, implementacja referencyjna w Scali, generowane `pattern.csv` i `transfer.csv` | testy jednostkowe Scali zielone, wektory w repo |
+| 1 | Kontrakt | `contract/commands.md` (wspólny), `contract/i2s/pattern.md` i `commands.md`; `transfer()` przeniesiony do `i2s` (`I2sFormat`); referencja w Scali: `I2sPattern`, `I2sCheckerModel`; `I2sVectors` generuje `pattern.csv`, `transfer.csv`, `checker_*.csv` | `I2sContractTestplan` zielony (w tym `ctr_vectors_fresh`), wektory w repo |
 | 2 | Harness w symulacji | `HilUartBridge`, `HilCoreRegs`, `HilCounters`, `HilCapture`, `HilResetInjector`, `I2sPatternGen`/`Check`, `I2sHarness` | `I2sHarnessTestplan` zielony, włącznie z wstrzykniętymi błędami; synteza w ISE z zapisaną zajętością i spełnionym timingiem |
 | 3 | ESP32 samo | `hil_cmd`, `hil_pattern`, `i2s_role`; `selftest` na wektorach i w pętli wewnętrznej; wyjście mastera zdekodowane w sigroku; slave sprawdzony przez drugi kontroler I2S tego samego S3 jako mastera | sigrok zgadza się z wzorcem dla 16/32, 24/32, 16/16, 32/32; slave przez 10^6 ramek bez błędu wyrównania kanałów |
 | 4 | Host | `HilLink`, `EspDevice`, `FpgaDevice`, `HilBench`, `HilSuite`; testpointy `hw_param_bounds`, `hw_link` | `hw_link` zielony na stanowisku, *canceled* bez niego |

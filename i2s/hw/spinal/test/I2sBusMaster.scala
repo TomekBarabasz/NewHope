@@ -32,14 +32,11 @@ object I2sBusMaster {
   /** Opoznienie wyjsc modelu (t_d) po jego wlasnym zboczu SCK. */
   val outDelay = 1
 
-  /** Slowo nadajnika (fromW bitow) przeslane w slocie `len` bitow i
-    * odebrane przez odbiornik o szerokosci toW, MSB-first: nadmiar LSB
-    * odciety, brak uzupelniony zerami. */
+  /** Przeniesione do I2sFormat (main), bo jest czescia kontraktu
+    * vertebra-hil. Alias zostaje, zeby `import I2sBusMaster._` w suitach
+    * dalej widzial transfer - implementacja jest jedna. */
   def transfer(v : Long, fromW : Int, len : Int, toW : Int) : Long =
-    (0 until toW).foldLeft(0L) { (acc, p) =>
-      val b = p < len && p < fromW && ((v >> (fromW - 1 - p)) & 1L) == 1L
-      (acc << 1) | (if (b) 1L else 0L)
-    }
+    I2sFormat.transfer(v, fromW, len, toW)
 
   class BusFrame(val idx       : Int,
                  val sent      : Option[Frame],   // None = cisza
