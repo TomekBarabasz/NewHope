@@ -67,27 +67,32 @@ Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **ind
 | `0x002` | `ip_id` | R | 4 znaki ASCII, wartość per IP (`<ip>/commands.md`) |
 | `0x003` | `build` | R | 32 najstarsze bity hasha gita z elaboracji |
 | `0x004` | `ctrl` | W | bit 0 start, bit 1 stop, bit 2 soft reset harnessu; impulsy, odczyt daje 0 |
-| `0x005` | `status` | R | bit 0 bieg, bit 1 lock, bit 2 był błąd |
+| `0x005` | `status` | R | bit 0 bieg, bit 1 lock, bit 2 był błąd, bit 3 migawka liczników gotowa |
 | `0x006` | `variant` | R | wariant bitstreamu, kodowanie per IP (`<ip>/commands.md`); host sprawdza go razem z `build` |
 | `0x007` | `scratch` | RW | dowolna wartość, bez wpływu na harness; test łącza (`hw_link`) |
-| `0x010` | `sent` | R | ramki oddane przez generator (handshake z DUT-em); ten i następne: migawka przy `stop`, czytać po `stop` |
-| `0x011` | `frames` | R | |
+| `0x010` | `sent` | R | ramki oddane przez generator (handshake z DUT-em) |
+| `0x011` | `frames` | R | liczniki checkera (`<ip>/pattern.md`) |
 | `0x012` | `bad` | R | |
 | `0x013` | `gaps` | R | |
 | `0x014` | `relocks` | R | |
 | `0x015` | `lock_at` | R | `0xFFFFFFFF` = brak locka |
 | `0x016` | `err_n` | R | pola `first_err`; ważne, gdy `bad > 0` |
 | `0x017`–`0x01A` | `err_got_l`, `err_got_r`, `err_exp_l`, `err_exp_r` | R | |
+| `0x01B` | `overflow` | R | ≠ 0: checker nie zdążył z ramką albo capture zgubił wpis |
+| `0x01C` | `cap_count` | R | liczba ważnych wpisów capture (≤ 32) |
+| `0x01D` | `rst_done` | R | resety DUT-a wykonane w biegu |
 | `0x020` | `seed` | RW | seed wzorca |
 | `0x021` | `gap_mode` | RW | 0 bez luk; 1 luka po każdych `gap_every` ramkach; 2 luka po ramce n, gdy `(xorshift32(n ^ seed ^ 0x9E3779B9) mod 2^16) & (gap_every - 1) == 0` (`gap_every` potęgą dwójki) |
 | `0x022` | `gap_every` | RW | 16 bitów; 0 = bez luk |
 | `0x023` | `gap_len` | RW | 16 bitów, liczba ramek ciszy w luce (liczona impulsami underrun DUT-a); 0 = bez luk |
-| `0x040` | `rst_count` | RW | liczba resetów DUT-a w biegu |
-| `0x041` | `rst_seed` | RW | seed LFSR opóźnień |
-| `0x042` | `rst_min` | RW | minimalne opóźnienie w cyklach `dut` |
-| `0x043` | `rst_max` | RW | maksymalne opóźnienie |
-| `0x044` | `rst_len` | RW | długość resetu w cyklach `dut` |
+| `0x040` | `rst_count` | RW | 16 bitów, liczba resetów DUT-a w biegu |
+| `0x041` | `rst_seed` | RW | seed opóźnień: r_1 = xorshift32(rst_seed \| 1), r_(k+1) = xorshift32(r_k) |
+| `0x042` | `rst_min` | RW | opóźnienie przed k-tym resetem: `rst_min + (r_k & rst_mask)` cykli `dut` |
+| `0x043` | `rst_mask` | RW | maska części losowej; `rst_min + rst_mask < 2^32` |
+| `0x044` | `rst_len` | RW | 16 bitów, długość resetu w cyklach `dut` (0 traktowane jak 1) |
 | `0x100`–`0x1FF` | per IP | RW | konfiguracja IP (`<ip>/commands.md`) |
-| `0x1000`– | `capture` | R | okno ramek wokół pierwszego błędu, 5 słów na ramkę: idx, got_l, got_r, exp_l, exp_r |
+| `0x1000`–`0x10FF` | `capture` | R | 32 wpisy po 8 słów: wpis i pod `0x1000 + 8i + j`, j = 0 idx ramki, 1 got_l, 2 got_r, 3 exp_l, 4 exp_r, 5–7 zera; okno: 16 wpisów przed pierwszym błędem i 16 od niego; kolejność po idx, ważnych `cap_count` |
 
-Rejestry RW można zapisywać tylko w stanie stop (inaczej status `04`). Adresy są stałymi w obiekcie mapy rejestrów IP (dla I2S `I2sHilRegs`, etap 2), z którego korzystają i harness, i host, więc ta tabela to dokumentacja kodu, a nie jego źródło. Przy rozbieżności wygrywa kod, a tabelę się poprawia.
+Liczniki `0x010`–`0x01D` to migawka z domeny DUT-a zrobiona przy `stop`. Są ważne, gdy `status` bit 3 (snapshot) = 1; `start` go kasuje, a migawka zostaje do następnego `stop`. Host: `stop`, czekanie na snapshot, odczyt.
+
+Rejestry RW można zapisywać tylko w stanie stop (inaczej status `04`); domena DUT-a zatrzaskuje konfigurację przy `start`. Dokładny harmonogram resetów opisuje `HilResetModel` (t0 = cykl, w którym start z zatrzaśniętą konfiguracją dociera do domeny `dut`: a_1 = t0 + 2 + d_1, a_(k+1) = a_k + len + 1 + d_(k+1)). Adresy są stałymi w obiekcie mapy rejestrów IP (dla I2S `I2sHilRegs`, etap 2), z którego korzystają i harness, i host, więc ta tabela to dokumentacja kodu, a nie jego źródło. Przy rozbieżności wygrywa kod, a tabelę się poprawia.

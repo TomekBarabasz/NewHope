@@ -47,10 +47,57 @@ object HilProtocol {
     /** Rejestry rdzenia zajmuja 0x000-0x00F; reszta idzie dalej (io.ext). */
     val CoreBase = 0x000
     val CoreSize = 0x010
+
+    // Generator (0x020-0x023) i wstrzykiwanie resetu (0x040-0x044): HilRunRegs.
+    val GenSeed  = 0x020
+    val GapMode  = 0x021
+    val GapEvery = 0x022
+    val GapLen   = 0x023
+    val RstCount = 0x040
+    val RstSeed  = 0x041
+    val RstMin   = 0x042
+    val RstMask  = 0x043
+    val RstLen   = 0x044
+    val RunBase  = 0x020
+    val RunSize  = 0x030
+
+    /** Blok konfiguracji IP (np. I2sHilRegs). */
+    val IpBase   = 0x100
+    val IpSize   = 0x100
+  }
+
+  /** Liczniki 0x010-0x01D: migawka z domeny DUT-a przy stop (HilCounters).
+    * Kolejnosc = adresy od Counters.Base. */
+  object Counters {
+    val Base  = 0x010
+    val Size  = 0x010
+    val names : Seq[String] = Seq(
+      "sent", "frames", "bad", "gaps", "relocks", "lock_at",
+      "err_n", "err_got_l", "err_got_r", "err_exp_l", "err_exp_r",
+      "overflow", "cap_count", "rst_done")
+    def addr(name : String) : Int = {
+      val i = names.indexOf(name)
+      require(i >= 0, s"nie ma licznika $name")
+      Base + i
+    }
+    /** Pierwsze `fromIp` slow pochodzi z checkera/generatora IP, reszte
+      * dokladaja HilCapture (cap_count) i HilResetInjector (rst_done). */
+    val fromIp = names.indexOf("cap_count")
+  }
+
+  /** Bufor przechwytywania (HilCapture): wpis i pod Base + i*Stride + j,
+    * j = 0 idx, 1 got_l, 2 got_r, 3 exp_l, 4 exp_r, 5..7 czytaja sie jako 0. */
+  object Capture {
+    val Base          = 0x1000
+    val Depth         = 32
+    val Stride        = 8
+    val WordsPerEntry = 5
+    def size : Int    = Depth * Stride
   }
 
   object CtrlBit   { val Start = 0; val Stop = 1; val SoftReset = 2 }
-  object StatusBit { val Running = 0; val Locked = 1; val Error = 2 }
+  /** Snapshot: liczniki po ostatnim stop sa gotowe do odczytu (kasuje go start). */
+  object StatusBit { val Running = 0; val Locked = 1; val Error = 2; val Snapshot = 3 }
 
   val Magic : Long = 0x48494C31L          // "HIL1"
 
@@ -105,4 +152,39 @@ object HilBuildInfo {
     val v     = java.lang.Long.parseLong(h.take(8), 16)
     if (dirty) v | 1L else v & ~1L
   }.getOrElse(0L)
+}
+
+/** Generator liczb harnessu (wspolny, bez zwiazku z wzorcem IP). */
+object HilRand {
+  val U32 : Long = 0xFFFFFFFFL
+  def xorshift32(x0 : Long) : Long = {
+    var x = x0 & U32
+    x ^= (x << 13) & U32
+    x ^= x >>> 17
+    x ^= (x << 5) & U32
+    x
+  }
+}
+
+/** Harmonogram HilResetInjector (contract/commands.md, rst_*).
+  *
+  * Wzgledem cyklu t0 impulsu dutGo (HilRunRegs: start w domenie DUT-a
+  * z juz zatrzasnieta konfiguracja):
+  *   r_1 = xorshift32(rst_seed | 1),  r_(k+1) = xorshift32(r_k)
+  *   d_k = rst_min + (r_k & rst_mask)
+  *   a_1 = t0 + 2 + d_1,  a_(k+1) = a_k + len + 1 + d_(k+1)
+  * Reset k trwa cykle [a_k, a_k + len), len = max(rst_len, 1). Stale 2 i 1
+  * to rejestry automatu (start -> licznik -> wyjscie), patrz HilResetInjector. */
+object HilResetModel {
+  def schedule(seed : Long, count : Int, min : Long, mask : Long, len : Int) : Seq[Long] = {
+    val l = scala.math.max(len, 1)
+    var r = HilRand.xorshift32(seed | 1L)
+    var a = 2L + min + (r & mask)
+    val out = scala.collection.mutable.ArrayBuffer[Long]()
+    for (k <- 0 until count) {
+      if (k > 0) { r = HilRand.xorshift32(r); a = a + l + 1 + min + (r & mask) }
+      out += a
+    }
+    out.toSeq
+  }
 }

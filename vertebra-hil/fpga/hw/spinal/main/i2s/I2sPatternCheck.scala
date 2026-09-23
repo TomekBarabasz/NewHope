@@ -25,6 +25,13 @@ case class I2sCheckStat(wrx : Int) extends Bundle {
   val errExp   = I2sFrame(wrx)
 }
 
+/** Wpis do bufora przechwytywania: kazde porownanie (cmp1), takze przed lockiem. */
+case class I2sCapEntry(wrx : Int) extends Bundle {
+  val idx = UInt(32 bits)
+  val got = I2sFrame(wrx)
+  val exp = I2sFrame(wrx)
+}
+
 case class I2sPatternCheck(wrx : Int) extends Component {
   require(wrx >= 1 && wrx <= 32, s"wrx=$wrx")
 
@@ -36,6 +43,7 @@ case class I2sPatternCheck(wrx : Int) extends Component {
     val locked   = out Bool()
     val badPulse = out Bool()           // kazda zla ramka po locku (capture, TRIG)
     val overrun  = out Bool()           // sticky
+    val cap      = master(Flow(I2sCapEntry(wrx)))   // razem z badPulse w tym samym cyklu
   }
 
   object Phase extends SpinalEnum { val hunt, confirm, locked = newElement() }
@@ -149,5 +157,9 @@ case class I2sPatternCheck(wrx : Int) extends Component {
   io.stat.errGot   := errGot
   io.stat.errExp   := errExp
   io.locked        := phase === Phase.locked
+  io.cap.valid       := step === Step.cmp1
+  io.cap.payload.idx := curIdx
+  io.cap.payload.got := got
+  io.cap.payload.exp := exp
   io.overrun       := ovf
 }

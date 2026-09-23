@@ -45,7 +45,7 @@ object HilCorePlan {
       "ctrl start/stop/soft reset i status",
       checking = Seq("start -> jeden impuls io.start, status.running = 1",
                      "stop i soft reset -> running = 0; stop wygrywa ze startem w jednym zapisie",
-                     "status.locked i status.error odwzorowuja wejscia")),
+                     "status.locked, status.error i status.snapshot odwzorowuja wejscia")),
     Testpoint("core_bad_sum", Stage.V1,
       "Zla suma: status bad_sum i brak efektu",
       checking = Seq("odpowiedz bad_sum z danymi 0", "scratch bez zmian")),
@@ -109,6 +109,7 @@ class HilCoreTestplan extends TestplanSuite {
           d.clockDomain.forkStimulus(period = clkPeriod)
           d.io.locked #= false
           d.io.error  #= false
+          d.io.snapshot #= false
           d.io.ext.rdata  #= 0
           d.io.ext.status #= Status.BadAddr
           val u = new HilUartSim(d.clockDomain, d.io.uart.rxd, d.io.uart.txd, hostPeriod(g))
@@ -175,6 +176,8 @@ class HilCoreTestplan extends TestplanSuite {
       assert(e.cli.readOk(Addr.Status) == (1L << Locked))
       e.d.io.error #= true
       assert(e.cli.readOk(Addr.Status) == ((1L << Locked) | (1L << Error)))
+      e.d.io.snapshot #= true
+      assert(e.cli.readOk(Addr.Status) == ((1L << Locked) | (1L << Error) | (1L << Snapshot)))
     }
 
     scenario("core_bad_sum") { e =>

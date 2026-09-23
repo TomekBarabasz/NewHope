@@ -187,6 +187,7 @@ case class HilCoreRegs(ipId : Long, build : Long, variant : Long) extends Compon
     val running   = out Bool()
     val locked    = in  Bool()      // z checkera IP (etap 2d)
     val error     = in  Bool()
+    val snapshot  = in  Bool()      // HilCounters.ready
     val scratch   = out Bits(32 bits)
   }
 
@@ -201,7 +202,7 @@ case class HilCoreRegs(ipId : Long, build : Long, variant : Long) extends Compon
   map.ro(Addr.IpId,    u32(ipId))
   map.ro(Addr.Build,   u32(build))
   val ctrl = map.strobe(Addr.Ctrl)
-  map.ro(Addr.Status,  io.error ## io.locked ## running)     // bity 2, 1, 0
+  map.ro(Addr.Status,  io.snapshot ## io.error ## io.locked ## running)   // bity 3..0
   map.ro(Addr.Variant, u32(variant))
   map.rw(Addr.Scratch, scratch, locked = false)
   map.build()
@@ -231,6 +232,7 @@ case class HilCore(g : HilBridgeGenerics, ipId : Long, build : Long, variant : L
     val running   = out Bool()
     val locked    = in  Bool()
     val error     = in  Bool()
+    val snapshot  = in  Bool()
     val rxError   = out Bool()
     val dropped   = out Bool()
     val timeout   = out Bool()
@@ -251,6 +253,7 @@ case class HilCore(g : HilBridgeGenerics, ipId : Long, build : Long, variant : L
   io.running   := regs.io.running
   regs.io.locked := io.locked
   regs.io.error  := io.error
+  regs.io.snapshot := io.snapshot
   io.rxError := bridge.io.rxError
   io.dropped := bridge.io.dropped
   io.timeout := bridge.io.timeout

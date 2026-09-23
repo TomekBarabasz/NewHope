@@ -13,7 +13,11 @@ import HilProtocol.Status
 //  PSLVERROR. Magistrala jest jednocyklowa i celowo prymitywna:
 //    - valid to impuls na jeden cykl, jedna transakcja na raz (most),
 //    - odpowiedz (rdata, status) jest kombinacyjna w cyklu valid,
-//    - efekt zapisu nastepuje na zboczu konczacym ten cykl.
+//    - efekt zapisu nastepuje na zboczu konczacym ten cykl,
+//    - addr, write i wdata sa stabilne co najmniej od cyklu PRZED valid
+//      do konca transakcji (most trzyma je w rejestrach od bajtu adresu),
+//      wiec slave moze czytac pamiec synchronicznie z bus.addr
+//      (HilCapture: readSync, dana gotowa w cyklu valid).
 //  Adres = indeks slowa 32-bitowego, jak w contract/commands.md.
 // =====================================================================
 case class HilRegBus() extends Bundle with IMasterSlave {

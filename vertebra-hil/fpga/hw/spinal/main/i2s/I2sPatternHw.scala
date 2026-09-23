@@ -25,12 +25,8 @@ case class I2sPatternCfg() extends Bundle {
 object I2sPatternHw {
   private def ones32 = B(BigInt(0xFFFFFFFFL), 32 bits)   // def: literal musi powstac w komponencie
 
-  /** xorshift32 (13, 17, 5), przesuniecia logiczne. */
-  def xorshift32(x0 : Bits) : Bits = {
-    val a = x0 ^ (x0 |<< 13)
-    val b = a  ^ (a  |>> 17)
-    b ^ (b |<< 5)
-  }
+  /** xorshift32 (13, 17, 5): jedna implementacja w HilHw. */
+  def xorshift32(x0 : Bits) : Bits = newhope.vertebra.hil.HilHw.xorshift32(x0)
 
   /** S = min(8, peerW/2 - 1), 4 bity. */
   def seqBits(peerW : UInt) : UInt = {

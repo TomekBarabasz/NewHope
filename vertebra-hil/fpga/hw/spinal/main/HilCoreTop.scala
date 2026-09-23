@@ -40,6 +40,7 @@ case class HilCoreTop(g : HilBridgeGenerics = HilBridgeGenerics(),
     HilRegBus.tieOff(core.io.ext)
     core.io.locked := False
     core.io.error  := False
+    core.io.snapshot := False
 
     val heartbeat = Reg(UInt(27 bits)) init 0
     heartbeat := heartbeat + 1
