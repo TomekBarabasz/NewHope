@@ -58,7 +58,7 @@ flowchart LR
   ESP["ESP32-S3<br/>firmware (ESP-IDF)"]
   FPGA["Mimas V2<br/>harness + DUT (Spinal)"]
   LA["Logic analyzer<br/>(sigrok)"]
-  PC -- "USB-CDC, komendy" --> ESP
+  PC -- "USB-Serial-JTAG, komendy" --> ESP
   PC -- "USB-UART, komendy" --> FPGA
   ESP <-- "I2S: SCK, WS, SD x2" --> FPGA
   LA -. "podgląd linii" .-> FPGA
@@ -117,7 +117,7 @@ NewHope/
       src/test/i2s/                 I2sHilTestplan
     esp32/                          ESP-IDF (CMake), poza sbt
       CMakeLists.txt, sdkconfig.defaults
-      main/                         etap 0: echo USB-CDC; potem i2s_role.c
+      main/                         etap 0: echo USB-Serial-JTAG; potem i2s_role.c
       components/hil_cmd, hil_pattern
     tools/                          flashowanie Mimas V2 (XMODEM), notatki o VM z ISE
 ```
@@ -313,7 +313,7 @@ ESP-IDF 5.x i nowy driver `i2s_std` w trybie Philips. Firmware nie zna scenarius
 
 | Moduł | Wspólny / per IP | Opis |
 | --- | --- | --- |
-| `components/hil_cmd` | wspólny | USB-CDC (natywne USB S3), parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami |
+| `components/hil_cmd` | wspólny | USB-Serial-JTAG (natywne USB S3, sprzętowy CDC-ACM), parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami |
 | `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4; wektory z `contract/i2s/vectors/` wbudowane przez `EMBED_FILES` |
 | `main/i2s_role.c` | per IP | konfiguracja kanału z `cfg`, task TX (wzorzec → `i2s_channel_write`), task RX (`i2s_channel_read` → checker) |
 
@@ -326,6 +326,9 @@ Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start`
 - **Przepustowość checkera**: najgorszy przypadek to 96 kHz × 2 × 32 bity, około 192 tys. słów/s. Jeden xorshift i porównanie na słowo przy 240 MHz to mały ułamek CPU. Przepełnienie DMA RX jest raportowane jako osobny licznik `overflow`, żeby nie udało błędu DUT-a.
 - **Piny**: zwykłe GPIO z dala od pinów strapping (0, 3, 45, 46), USB (19, 20) i pamięci modułu. Konkretne numery do ustalenia pod posiadany dev board.
 - **`ver`** zwraca wersję protokołu i wersję aplikacji z `esp_app_desc` (hash gita).
+- **Transport to USB-Serial-JTAG, nie TinyUSB CDC.** Nie wymaga dodatkowego komponentu, a przez ten sam port działa `idf.py flash`. Dev board ma dwa złącza USB: natywne (protokół HIL, na stanowisku COM11) i mostek CH343 na UART0 (logi, COM10). Do testów wystarcza natywne.
+- **Konsola IDF nie może używać USB-Serial-JTAG**, bo logi mieszałyby się z odpowiedziami `hil_cmd`. Potrzebne są `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` i `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y`. S3 domyślnie ma konsolę dodatkową na USB-Serial-JTAG. W etapie 0 `sdkconfig` odtworzony po usunięciu dwa razy wrócił do tego ustawienia, mimo `sdkconfig.defaults`; pomogło dopiero przestawienie w `idf.py menuconfig`. Po każdym świeżym buildzie sprawdzamy te dwie opcje, a przyczynę pominięcia `sdkconfig.defaults` trzeba jeszcze znaleźć (§11).
+- **DTR/RTS resetują układ.** Na USB-Serial-JTAG zmiana tych linii to automatyczny reset, którego używa `idf.py flash`. Niektóre sekwencje zostawiają układ w trybie pobierania firmware'u; wtedy pomaga przycisk RST albo odłączenie zasilania. Host otwiera port z DTR i RTS nieaktywnymi od początku (§8). ROM pisze komunikat startowy także na USB, a USB-Serial-JTAG buforuje go do odczytu, więc linia `ESP-ROM:...` po otwarciu portu oznacza reset, choćby wcześniejszy.
 
 ## 8. Orkiestrator PC
 
@@ -335,11 +338,11 @@ Orkiestrator to suita `TestplanSuite` w Scali, w podprojekcie sbt `hil` (`verteb
 
 | Klasa | Wspólna / per IP | Opis |
 | --- | --- | --- |
-| `HilLink` | wspólna | port szeregowy (jSerialComm), timeouty, ponowienie przy błędzie sumy, log całego ruchu do pliku per test |
+| `HilLink` | wspólna | port szeregowy (jSerialComm), timeouty, ponowienie przy błędzie sumy, log całego ruchu do pliku per test; port po nazwie systemowej z enumeracji (`COM11`, `/dev/ttyACM1`), a nie przez `getCommPort`; DTR/RTS nieaktywne przy otwarciu (ESP32); synchronizacja po otwarciu, zanim pójdzie pierwsza komenda |
 | `HilDevice` | wspólny trait | `info`, `cfg(Map)`, `start`, `stop`, `stat: HilStat`, `dump` |
 | `EspDevice` | wspólna | `HilDevice` po protokole tekstowym |
 | `FpgaDevice[R]` | wspólna, generyczna po mapie rejestrów | `HilDevice` po moście binarnym; klucze `cfg` mapowane na rejestry przez `R` (np. `I2sHilRegs`) |
-| `HilBench` | wspólna | znajduje porty (`VERTEBRA_HIL_ESP`, `VERTEBRA_HIL_FPGA`), sprawdza wersje (§5), jedna instancja na JVM |
+| `HilBench` | wspólna | znajduje porty (opcje `--esp_com`/`--fpga_com` nadpisują `VERTEBRA_HIL_ESP`/`VERTEBRA_HIL_FPGA`), sprawdza wersje (§5), jedna instancja na JVM |
 | `HilSuite` | wspólna | `TestplanSuite` + `hwScenario(name, variant)(body)` |
 | `I2sHilTestplan` | per IP | plan `hw_*`, konfiguracje, scenariusze |
 
@@ -401,6 +404,12 @@ Zasady:
 - **Kable krótkie**, do ok. 15 cm, taśma z masą między liniami sygnałowymi. Podwójne zbocze na SCK od dzwonienia to błąd stanowiska, nie IP; `hw_la_crosscheck` ma to wykluczyć.
 - **Zasilanie** obu płytek z jednego zasilanego huba USB, żeby nie mieć pętli masy przez dwa porty PC.
 
+### Gdzie co działa
+
+Kontener `ghcr.io/spinalhdl/docker` służy do symulacji i generacji Veriloga. Wszystko, co dotyka sprzętu (`EchoProbe`, flashowanie Mimas V2, suity `hw_*`), działa na hoście: na Windows z natywnym JDK 17 i sbt, porty `COMx`. Kontener na Windows działa w maszynie Linuksa Docker Desktop i nie widzi portów COM. Przekazanie USB przez usbipd-win jest możliwe, ale płytki po każdym resecie pojawiają się na nowo i `--device` przestaje pasować. `hil` kompiluje się na hoście bez Verilatora i GHDL-a. Kontener i host dzielą `target/`, więc po przejściu między nimi pierwsza kompilacja jest pełna.
+
+ISE 14.7 działa w osobnej VM i dostaje tylko wygenerowany Verilog (`fpga/hw/gen`).
+
 ### Logic analyzer
 
 Do dekodowania I2S w sigroku wystarczy tani analizator 8 kan./24 MS/s przy BCLK do ok. 3 MHz (ok. 8 próbek na bit). Konfiguracja 96 kHz / 32 bity daje BCLK 6,144 MHz, czyli ok. 4 próbki na bit, co jest na granicy. Do tych konfiguracji i do jakichkolwiek pomiarów timingu potrzebny jest analizator ≥ 100 MS/s. Linia TRIG pozwala ustawić wyzwalanie dokładnie na pierwszym błędzie checkera FPGA.
@@ -411,7 +420,7 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 | # | Etap | Zakres | Kryterium ukończenia |
 | --- | --- | --- | --- |
-| 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hilFpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-CDC; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-CDC na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
+| 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hilFpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-Serial-JTAG; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-Serial-JTAG na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
 | 1 | Kontrakt | `contract/commands.md` (wspólny), `contract/i2s/pattern.md` i `commands.md`; `transfer()` przeniesiony do `i2s` (`I2sFormat`); referencja w Scali: `I2sPattern`, `I2sCheckerModel`; `I2sVectors` generuje `pattern.csv`, `transfer.csv`, `checker_*.csv` | `I2sContractTestplan` zielony (w tym `ctr_vectors_fresh`), wektory w repo |
 | 2 | Harness w symulacji | `HilUartBridge`, `HilCoreRegs`, `HilCounters`, `HilCapture`, `HilResetInjector`, `I2sPatternGen`/`Check`, `I2sHarness` | `I2sHarnessTestplan` zielony, włącznie z wstrzykniętymi błędami; synteza w ISE z zapisaną zajętością i spełnionym timingiem |
 | 3 | ESP32 samo | `hil_cmd`, `hil_pattern`, `i2s_role`; `selftest` na wektorach i w pętli wewnętrznej; wyjście mastera zdekodowane w sigroku; slave sprawdzony przez drugi kontroler I2S tego samego S3 jako mastera | sigrok zgadza się z wzorcem dla 16/32, 24/32, 16/16, 32/32; slave przez 10^6 ramek bez błędu wyrównania kanałów |
@@ -421,6 +430,8 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 | 7 | I2S V3 | reset DUT-a w losowym momencie, `hw_clock_ratio_sweep` (dynamiczne M/D DCM\_CLKGEN), `hw_soak` | 10 min soak na każdą rolę bez błędu; znaleziona granica zegara slave'a zgodna z `supportsSckHalf` |
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
+
+**Stan etapu 0 (2026-09-24).** Echo z obu płytek przechodzi z hosta na Windows: FPGA 4 KiB w 544 ms (UART 115200 przez PIC, COM12), ESP32 4 KiB w 23 ms (USB-Serial-JTAG, COM11), zero przekłamań. Otwarcie portu ESP32 nie resetuje już układu, a konsola IDF jest tylko na UART0. Zostały pytania z §11: VCCO banku 2, piny ESP32-S3, logic analyzer z sigrokiem.
 
 Etap 2 idzie krokami, każdy z własnym zielonym testplanem: 2a most i rejestry rdzenia (`HilCoreTestplan`, na płytce `HilCoreTop`), 2b `I2sPatternGen`/`Check` na wektorach kontraktu, 2c liczniki z migawką CDC, capture i wstrzykiwanie resetu, 2d `I2sHarness` z DUT-ami przez UART, 2e synteza w ISE.
 
@@ -444,12 +455,17 @@ Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z w
 | Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |
 | fs mastera z DCM tylko przybliżone | fs na pinach odbiega o ≤ 0,1% | generyki z wartością nominalną; zewnętrzny oscylator audio, jeśli któryś test będzie tego wymagał |
 | Artefakty okablowania (dzwonienie, masa) | błędy przypisane IP | krótkie kable, rezystory, `hw_la_crosscheck` |
+| Reset ESP32 przez DTR/RTS przy otwieraniu portu | utrata konfiguracji z `cfg`, czasem układ w trybie pobierania | DTR/RTS nieaktywne przy otwarciu, jeden port otwarty przez całą sesję, `ver` po otwarciu wykrywa reset (§7) |
+| Konsola IDF na USB-Serial-JTAG po odtworzeniu `sdkconfig` | logi w strumieniu protokołu | kontrola `CONFIG_ESP_CONSOLE_*` po buildzie; `hil_cmd` odrzuca linie, które nie są odpowiedzią (§7) |
+| Sprzęt niewidoczny z kontenera | testy `hw_*` nie widzą portów | sprzęt obsługuje host, kontener tylko symulację (§9) |
 | Obcięte słowa ukrywają część błędów (§4) | słabsza detekcja w `word_length_mismatch` | `hw_param_bounds` wypisuje granicę wykrywalności per konfiguracja |
 
 Otwarte pytania:
 
-- [ ] Częstotliwość oscylatora Mimas V2 i VCCO banku 2 (ze schematu).
-- [ ] Który dev board ESP32-S3 (piny wolne od strapping, USB i pamięci modułu).
+- [x] Częstotliwość oscylatora Mimas V2: 100 MHz na V10. Potwierdzone w praktyce: UART 115200 z dzielnikiem liczonym dla 100 MHz działa bez błędów (etap 0).
+- [ ] VCCO banku 2 (P7) = 3,3 V, ze schematu. Przy okazji bank 1 (P9).
+- [ ] Piny ESP32-S3 na posiadanym dev boardzie (wolne od strapping, USB i pamięci modułu). Płytka ma natywne USB i mostek CH343 na UART0 (§7).
+- [ ] Dlaczego `sdkconfig.defaults` był pomijany przy odtwarzaniu `sdkconfig` (§7): zweryfikować po `idf.py save-defconfig` i poprawić plik w repo.
 - [ ] Jaki logic analyzer jest dostępny i czy obsłuży BCLK 6,144 MHz.
 - [ ] Zajętość XC6SLX9 z oboma DUT-ami: po pierwszej syntezie w etapie 2.
 - [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
