@@ -21,6 +21,19 @@ Uzupełnienie `../commands.md` o to, co zna I2S. Wzorzec danych, `transfer` i ch
 
 Checker ESP32 liczy `Link(seed, Wtx = peer_w, slot, Wrx = w)`; `cfg` odrzuca połączenie, które nie jest `checkable` (`err 3`).
 
+## FPGA: wariant
+
+Jeden bitstream na wariant (`vertebra-hil.md` §6). Rejestr `variant` (`0x006`):
+
+| Bity | Pole |
+| --- | --- |
+| 7:0 | `width` obu DUT-ów |
+| 15:8 | `slotWidth` mastera |
+| 23:16 | `halfDiv` mastera |
+| 31:24 | 0 |
+
+Warianty: 16/32, 24/32, 16/16 i 32/32 (konfiguracje z §8).
+
 ## FPGA: blok `0x100`–`0x1FF`
 
 Konfiguracja I2S harnessu (rola, `width`, dzielnik mastera, M/D DCM\_CLKGEN dla `dut`) powstaje w etapie 2 jako `object I2sHilRegs`. Tu trafi jej tabela.

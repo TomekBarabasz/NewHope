@@ -40,7 +40,7 @@ Liczby są dziesiętne, a słowa danych i seed szesnastkowe, 8 cyfr, małe liter
 
 ## FPGA: binarny most do rejestrów
 
-Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **indeks słowa 32-bitowego** (u16), nie adres bajtowy; most mnoży go przez 4 po stronie Apb3.
+Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **indeks słowa 32-bitowego** (u16), nie adres bajtowy. W harnessie most wystawia go bez zmian na wewnętrzną magistralę `HilRegBus` (nie Apb3: potrzebny jest kod błędu z rejestru, a Apb3 ma tylko `PSLVERROR`).
 
 | Ramka | Bajty |
 | --- | --- |
@@ -48,14 +48,14 @@ Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **ind
 | odczyt | `A5 01 addr_hi addr_lo sum` |
 | odpowiedź | `5A status d3 d2 d1 d0 sum` |
 
-`sum` to XOR wszystkich wcześniejszych bajtów ramki, łącznie z `A5` / `5A`. Dane big-endian. Odpowiedź na zapis niesie zapisaną wartość odczytaną z powrotem, a przy błędzie `0`. Most porzuca niedokończoną ramkę po 10 ms ciszy między bajtami i czeka na następne `A5`; host po timeoutie odpowiedzi wysyła ramkę jeszcze raz (odczyty i zapisy są idempotentne, `ctrl` jest wyjątkiem: host czyta `status`, zanim ponowi).
+`sum` to XOR wszystkich wcześniejszych bajtów ramki, łącznie z `A5` / `5A`. Dane big-endian. Odpowiedź na odczyt niesie wartość rejestru, odpowiedź na udany zapis powtarza zapisane dane (bez odczytu z powrotem: rejestry impulsowe czytają się jako 0), a przy błędzie dane to `0`. Każda kompletna ramka dostaje dokładnie jedną odpowiedź. Nieznana operacja ma długość odczytu (5 bajtów). Bajty inne niż `A5` poza ramką są ignorowane. Most porzuca niedokończoną ramkę po 10 ms ciszy między bajtami i czeka na następne `A5`; bajty przychodzące w trakcie odpowiedzi przepadają. Host po timeoutcie odpowiedzi wysyła ramkę jeszcze raz (odczyty i zapisy są idempotentne, `ctrl` jest wyjątkiem: host czyta `status`, zanim ponowi).
 
 | Status | Znaczenie |
 | --- | --- |
 | `00` | ok |
 | `01` | zła suma |
 | `02` | adres poza mapą |
-| `03` | nieznana operacja |
+| `03` | nieznana operacja albo zapis rejestru tylko do odczytu |
 | `04` | zapis konfiguracji w trakcie biegu |
 
 ### Mapa rejestrów (część wspólna)
@@ -68,6 +68,8 @@ Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **ind
 | `0x003` | `build` | R | 32 najstarsze bity hasha gita z elaboracji |
 | `0x004` | `ctrl` | W | bit 0 start, bit 1 stop, bit 2 soft reset harnessu; impulsy, odczyt daje 0 |
 | `0x005` | `status` | R | bit 0 bieg, bit 1 lock, bit 2 był błąd |
+| `0x006` | `variant` | R | wariant bitstreamu, kodowanie per IP (`<ip>/commands.md`); host sprawdza go razem z `build` |
+| `0x007` | `scratch` | RW | dowolna wartość, bez wpływu na harness; test łącza (`hw_link`) |
 | `0x010` | `sent` | R | liczniki checkera i generatora; migawka przy `stop`, czytać po `stop` |
 | `0x011` | `frames` | R | |
 | `0x012` | `bad` | R | |

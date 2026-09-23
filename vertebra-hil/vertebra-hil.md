@@ -105,7 +105,7 @@ NewHope/
       i2s/                          pattern.md, commands.md (cfg, ip_id, blok 0x100), vectors/ (etap 1)
       i2c/                          jw. dla I2C, później
     fpga/                           sbt: hilFpga (hwSettings)
-      hw/spinal/main/               Config, HilEchoTop (etap 0); HilUartBridge, HilCoreRegs... (etap 2)
+      hw/spinal/main/               Config, HilEchoTop (etap 0); HilProtocol, HilRegBus, HilUartBridge (HilCore, HilCoreRegs), HilCoreTop (2a)...
       hw/spinal/main/i2s/           I2sPattern, I2sCheckerModel, I2sVectors (etap 1); I2sHilRegs, I2sPatternGen/Check, I2sHarness (etap 2)
       hw/spinal/test/               HilEchoTopTestplan (etap 0)
       hw/spinal/test/i2s/           I2sContractTestplan (etap 1), I2sHarnessTestplan
@@ -243,7 +243,7 @@ Mapa rejestrów (słowa 32-bitowe):
 | `0x010`–`0x01F` | liczniki checkera w układzie z §4 | wspólny układ |
 | `0x020`–`0x03F` | generator: seed, luki (co ile ramek, ile, losowo z seeda) | wspólny układ |
 | `0x040`–`0x04F` | reset DUT-a: liczba, seed, zakres opóźnienia, długość | wspólny |
-| `0x100`–`0x1FF` | konfiguracja IP (I2S: rola, `width`, dla mastera wybór dzielnika) | per IP |
+| `0x100`–`0x1FF` | konfiguracja IP (I2S: rola, parametry nadawcy dla checkera, M/D zegara `dut`) | per IP |
 | `0x1000`– | bufor przechwytywania wokół pierwszego błędu | wspólny |
 
 Na host i na harness składa się ten sam `object I2sHilRegs`. Adres jest stałą Scali, więc rozjazd mapy to błąd kompilacji, a nie wieczór z oscyloskopem.
@@ -254,13 +254,13 @@ Orkiestrator zawsze zaczyna od `ver` / odczytu `0x000`–`0x003` i porównuje we
 
 ## 6. Harness FPGA
 
-Jeden bitstream na IP, zawierający wspólny rdzeń (UART, rejestry, liczniki, bufor, wstrzykiwanie resetu) i część I2S (oba DUT-y, generator, checker, multipleks pinów). Rola master/slave jest rejestrem, nie osobnym bitstreamem.
+Jeden bitstream na **wariant** IP, zawierający wspólny rdzeń (UART, rejestry, liczniki, bufor, wstrzykiwanie resetu) i część I2S (oba DUT-y, generator, checker, multipleks pinów). Generyki DUT-ów (`width`, `slotWidth`, `halfDiv`) są ustalane przy elaboracji, więc każda kombinacja z listy konfiguracji (§8) to osobny bitstream: dla I2S 16/32, 24/32, 16/16 i 32/32. Wariant jest w rejestrze `variant`, a `HilBench` wgrywa właściwy bitstream sam i grupuje testy według wariantów. Rola master/slave jest rejestrem (multipleks pinów). fs mastera ustawia M/D zegara `dut` (DCM\_CLKGEN), a nie dzielnik.
 
 ### Płytka: co z niej wynika
 
 Z [dokumentacji Mimas V2](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/):
 
-- **XC6SLX9 (CSG324).** Mały układ, więc zajętość trzeba sprawdzić po pierwszej syntezie. Plan awaryjny: osobne bitstreamy dla roli master i slave.
+- **XC6SLX9 (CSG324).** Mały układ, więc zajętość trzeba sprawdzić po pierwszej syntezie. Plan awaryjny: osobne bitstreamy dla roli master i slave (podział wariantów o rolę).
 - **Toolchain: ISE 14.7.** Spartan-6 nie jest wspierany przez Vivado. Spinal generuje Verilog, ISE robi resztę z `-g binary`; `.bin` idzie do flash przez XMODEM (`programmer.py` z repozytorium firmware albo `sx`).
 - **UART 115200 przez PIC z firmware [jimmo/numato-mimasv2-pic-firmware](https://github.com/jimmo/numato-mimasv2-pic-firmware).** Płytka wystawia dwa porty USB: jeden do programowania flash SPI (XMODEM), drugi to UART FPGA. Przełącznik SW7 przestaje być potrzebny, więc flashowanie i testy mogą iść z jednego skryptu bez ręcznej obsługi. Przy 115200 odczyt liczników to kilka ms, a zrzut bufora ułamek sekundy. Baud zostaje generykiem harnessu, na wypadek płytki z fabrycznym firmware (19200).
 - **32 GPIO na złączach P6–P9.** Piny P9 leżą w banku 1 dzielonym z LPDDR: napięcie tego banku trzeba sprawdzić w schemacie, a do czasu sprawdzenia używamy tylko P6–P8.
@@ -283,8 +283,8 @@ Zasada CDC: konfiguracja zmienia się tylko w stanie `stop`, a liczniki czyta si
 
 | Komponent | Wspólny / per IP | Opis |
 | --- | --- | --- |
-| `HilUartBridge` | wspólny | `UartCtrl` ze spinal.lib + parser ramek z §5, wystawia Apb3 |
-| `HilCoreRegs` | wspólny | id, hash gita, ctrl/status; `Apb3SlaveFactory` |
+| `HilUartBridge` | wspólny | `UartCtrl` ze spinal.lib + parser ramek z §5, wystawia `HilRegBus` (jednocyklowa magistrala z kodem statusu zamiast Apb3) |
+| `HilCoreRegs` | wspólny | magic, wersja, id, hash gita, ctrl/status, variant, scratch; `HilRegMap` (mała mapa rejestrów nad `HilRegBus`) |
 | `HilCounters` | wspólny | liczniki checkera w układzie z §4, snapshot przy `stop` |
 | `HilCapture[T]` | wspólny, generyczny po payloadzie | BRAM, okno ramek wokół pierwszego błędu (got i exp) |
 | `HilResetInjector` | wspólny | N resetów DUT-a, opóźnienie z LFSR w zakresie z rejestru |
@@ -422,6 +422,8 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+Etap 2 idzie krokami, każdy z własnym zielonym testplanem: 2a most i rejestry rdzenia (`HilCoreTestplan`, na płytce `HilCoreTop`), 2b `I2sPatternGen`/`Check` na wektorach kontraktu, 2c liczniki z migawką CDC, capture i wstrzykiwanie resetu, 2d `I2sHarness` z DUT-ami przez UART, 2e synteza w ISE.
+
 ### Potem I2C
 
 Przy I2C bez zmian powinny przejść: `HilLink`, `HilDevice`, `HilBench`, `HilSuite`, `hil_cmd`, most UART, rejestry rdzenia, liczniki, bufor przechwytywania i wstrzykiwanie resetu. Nowe będą: wzorzec transakcji zamiast ramek, `I2cHarness`, `main/i2c_role.c`, `I2cHilTestplan` oraz elektryka open-drain (pull-upy, czasy narastania, clock stretching przez ESP32), czyli to, czego symulacja nie ma wcale.
@@ -437,7 +439,7 @@ Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z w
 | Ryzyko | Skutek | Co robimy |
 | --- | --- | --- |
 | Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | sprawdzenie w etapie 3 przez drugi kontroler; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
-| Oba DUT-y nie mieszczą się w XC6SLX9 | brak wspólnego bitstreamu | dwa bitstreamy (master, slave), ta sama mapa rejestrów |
+| Oba DUT-y nie mieszczą się w XC6SLX9 | wariant nie mieści się w układzie | podział wariantu na bitstreamy master i slave, ta sama mapa rejestrów |
 | ISE 14.7 na współczesnym systemie | tarcie przy budowaniu | VM albo kontener z ISE, build ze skryptu |
 | Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |
 | fs mastera z DCM tylko przybliżone | fs na pinach odbiega o ≤ 0,1% | generyki z wartością nominalną; zewnętrzny oscylator audio, jeśli któryś test będzie tego wymagał |
