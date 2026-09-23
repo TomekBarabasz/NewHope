@@ -1,5 +1,6 @@
 package newhope.i2s
 
+import spinal.core.Bool
 import spinal.core.sim._
 import scala.collection.mutable
 import I2sEvent._
@@ -48,7 +49,13 @@ object I2sBusMaster {
   }
 }
 
-class I2sBusMaster(pins : I2sPins, sckHalf : Int, slotWidth : Int, width : Int) {
+/** Linie od strony mastera (jak I2sPins): sck, ws i sdo steruje, sdi czyta.
+  * Konstruktor na sygnalach pozwala podpiac model do pinow harnessu
+  * vertebra-hil. */
+class I2sBusMaster(sck : Bool, ws : Bool, sdo : Bool, sdi : Bool,
+                   sckHalf : Int, slotWidth : Int, width : Int) {
+  def this(pins : I2sPins, sckHalf : Int, slotWidth : Int, width : Int) =
+    this(pins.sck, pins.ws, pins.sdo, pins.sdi, sckHalf, slotWidth, width)
   import I2sBusMaster._
 
   // --- konfiguracja; zmiana dziala od nastepnego bitu / slotu / ramki ----
@@ -111,22 +118,22 @@ class I2sBusMaster(pins : I2sPins, sckHalf : Int, slotWidth : Int, width : Int) 
       assert(lo > outDelay && hi > outDelay, s"polowka SCK $lo/$hi <= outDelay")
 
       // --- opadajace SCK
-      pins.sck #= false
+      sck #= false
       sleep(outDelay)
-      if (j == 0) pins.ws #= ch
-      if (!leadingEdge) pins.sdo #= (if (j == 0) prevTx.last else tx(j - 1))
+      if (j == 0) ws #= ch
+      if (!leadingEdge) sdo #= (if (j == 0) prevTx.last else tx(j - 1))
       sleep(lo - outDelay)
 
       // --- narastajace SCK: najpierw probka SDI, potem zbocze
-      val s = pins.sdi.toBoolean
+      val s = sdi.toBoolean
       if (j == 0) { prevRx(prevRx.length - 1) = s; finishPrev() }
       else rx(j - 1) = s
-      pins.sck #= true
-      if (leadingEdge) { sleep(outDelay); pins.sdo #= tx(j); sleep(hi - outDelay) }
+      sck #= true
+      if (leadingEdge) { sleep(outDelay); sdo #= tx(j); sleep(hi - outDelay) }
       else sleep(hi)
 
       // Tuz przed nastepnym opadajacym: SDI slave'a nie moglo sie ruszyc.
-      if (pins.sdi.toBoolean != s)
+      if (sdi.toBoolean != s)
         violations += s"ramka ${frame.map(_.idx).getOrElse(-1)} ${if (ch) "R" else "L"} " +
                       s"bit $j: SDI zmienione przy wysokim SCK"
     }
@@ -134,7 +141,7 @@ class I2sBusMaster(pins : I2sPins, sckHalf : Int, slotWidth : Int, width : Int) 
   }
 
   def start() : Unit = fork {
-    pins.sck #= false; pins.ws #= true; pins.sdo #= false
+    sck #= false; ws #= true; sdo #= false
 
     val l0 = slotLen()
     runSlot(ch = true, l0, Array.fill(l0)(false), None)      // slot wstepny

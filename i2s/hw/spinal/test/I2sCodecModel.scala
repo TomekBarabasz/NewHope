@@ -1,5 +1,6 @@
 package newhope.i2s
 
+import spinal.core.{Bool, ClockDomain}
 import spinal.core.sim._
 import scala.collection.mutable
 import I2sEvent._
@@ -45,9 +46,13 @@ object I2sCodecModel {
   val minHalfDiv = 1
 }
 
-class I2sCodecModel(d : I2sMaster) {
-  private val g  = d.g
-  private val cd = d.clockDomain
+/** Linie od strony mastera (jak I2sPins): sck, ws i sdo czyta, sdi steruje.
+  * Konstruktor na sygnalach pozwala podpiac model do pinow harnessu
+  * vertebra-hil, gdzie master DUT siedzi w srodku wiekszego komponentu. */
+class I2sCodecModel(sck : Bool, ws : Bool, sdo : Bool, sdi : Bool,
+                    width : Int, slotWidth : Int, cd : ClockDomain) {
+  def this(d : I2sMaster) =
+    this(d.io.pins.sck, d.io.pins.ws, d.io.pins.sdo, d.io.pins.sdi, d.g.width, d.g.slotWidth, d.clockDomain)
 
   /** Czym wypelniac padding. Domyslnie zera, jak robi to wiekszosc kodekow;
     * i2s_padding ustawia jedynki, zeby smieci w paddingu byly widoczne. */
@@ -56,7 +61,7 @@ class I2sCodecModel(d : I2sMaster) {
   /** Dlugosc slowa KODEKA. Domyslnie == width DUT-a; inna wartosc to kodek
     * o innej rozdzielczosci (i2s_rx_word_length_mismatch). 1..slotWidth.
     * Zmiana dziala od nastepnego slotu. */
-  var wordWidth : Int = g.width
+  var wordWidth : Int = width
 
   /** Nadajnik taktujacy SD narastajacym SCK zamiast opadajacego. Specyfikacja
     * dopuszcza oba zbocza po stronie nadajnika i wymaga zatrzasniecia na
@@ -86,8 +91,8 @@ class I2sCodecModel(d : I2sMaster) {
       cd.waitActiveEdge()
       sleep(I2sCodecModel.outDelay)   // od tej chwili czytamy stan PO zboczu
       if (cd.isResetAsserted) onReset()
-      else if (loopback) d.io.pins.sdi #= d.io.pins.sdo.toBoolean
-      else step(d.io.pins.sck.toBoolean, d.io.pins.ws.toBoolean)
+      else if (loopback) sdi #= sdo.toBoolean
+      else step(sck.toBoolean, ws.toBoolean)
     }
   }
 
@@ -103,17 +108,17 @@ class I2sCodecModel(d : I2sMaster) {
 
   private def onReset() : Unit = {
     out.clear(); synced = false; cur = None; prev = None
-    d.io.pins.sdi #= false
+    sdi #= false
   }
 
   private def slot(v : Long) : Seq[Boolean] = {
-    require(wordWidth >= 1 && wordWidth <= g.slotWidth,
-            s"wordWidth = $wordWidth poza 1..${g.slotWidth}")
+    require(wordWidth >= 1 && wordWidth <= slotWidth,
+            s"wordWidth = $wordWidth poza 1..$slotWidth")
     (wordWidth - 1 to 0 by -1).map(i => ((v >> i) & 1) != 0) ++
-    Seq.fill(g.slotWidth - wordWidth)(padFill)
+    Seq.fill(slotWidth - wordWidth)(padFill)
   }
 
-  private def step(sck : Boolean, ws : Boolean) : Unit = {
+  private def step(sckV : Boolean, wsV : Boolean) : Unit = {
     for ((pSck, pWs) <- prev) {
       // Trailing (domyslnie): najpierw bit dla tego opadajacego SCK, POTEM
       // ewentualny nowy slot. Zamiana kolejnosci daje left-justified.
@@ -121,12 +126,12 @@ class I2sCodecModel(d : I2sMaster) {
       // r_(j+1). Slot laduje sie na opadajacym f0, a jego S bitow schodzi
       // na S narastajacych zboczach slotu, wiec kolejka jest pusta na
       // kazdym f0 i opoznienie o bit wychodzi samo.
-      val shift = if (leadingEdge) !pSck && sck else pSck && !sck
+      val shift = if (leadingEdge) !pSck && sckV else pSck && !sckV
       if (shift)
-        d.io.pins.sdi #= (if (out.nonEmpty) out.dequeue() else false)
+        sdi #= (if (out.nonEmpty) out.dequeue() else false)
 
-      if (ws != pWs) {
-        if (!ws) {
+      if (wsV != pWs) {
+        if (!wsV) {
           synced = true
           cur = if (pending.nonEmpty) Some(pending.dequeue()) else None
           _log += cur
@@ -136,6 +141,6 @@ class I2sCodecModel(d : I2sMaster) {
         }
       }
     }
-    prev = Some((sck, ws))
+    prev = Some((sckV, wsV))
   }
 }

@@ -32,8 +32,23 @@ Jeden bitstream na wariant (`vertebra-hil.md` §6). Rejestr `variant` (`0x006`):
 | 23:16 | `halfDiv` mastera |
 | 31:24 | 0 |
 
-Warianty: 16/32, 24/32, 16/16 i 32/32 (konfiguracje z §8).
+Warianty (`I2sHilVariant`; zegar `dut` stały w wariancie, `dut = fs · 2 · slotWidth · 2 · halfDiv`):
+
+| Nazwa | fs | width | slotWidth | halfDiv | dut |
+| --- | --- | --- | --- | --- | --- |
+| `v16_32` | 48 kHz | 16 | 32 | 8 | 49,152 MHz |
+| `v24_32` | 44,1 kHz | 24 | 32 | 8 | 45,1584 MHz |
+| `v16_16` | 48 kHz | 16 | 16 | 16 | 49,152 MHz |
+| `v32_32` | 48 kHz | 32 | 32 | 8 | 49,152 MHz |
+
+`halfDiv` jest dobrany tak, żeby w roli slave polokres SCK ESP32 (slot 32) miał około 8 cykli `dut`, przy wymaganiu slave'a > 3. Dynamiczne M/D zegara `dut` dochodzi osobnym krokiem przed `hw_clock_ratio_sweep`.
 
 ## FPGA: blok `0x100`–`0x1FF`
 
-Konfiguracja I2S harnessu (rola, `width`, dzielnik mastera, M/D DCM\_CLKGEN dla `dut`) powstaje w etapie 2 jako `object I2sHilRegs`. Tu trafi jej tabela.
+| Adres | Nazwa | Dostęp | Opis |
+| --- | --- | --- | --- |
+| `0x100` | `role` | RW | 0 = FPGA slave (SCK/WS wejścia), 1 = FPGA master; po resecie 0, żeby FPGA nie walczył z ESP32-masterem |
+| `0x101` | `peer_w` | RW | szerokość słowa ESP32 (`Wtx` checkera FPGA), po resecie `width` wariantu |
+| `0x102` | `slot` | RW | slot na magistrali dla checkera: w roli master `slotWidth` wariantu, w roli slave slot ESP32; po resecie `slotWidth` |
+
+Zapis tylko w stanie stop, zatrzaśnięcie przy `start` (jak rejestry biegu). Host sprawdza przed startem `Link(seed, peer_w, slot, width).checkable`.
