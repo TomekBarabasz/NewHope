@@ -1,0 +1,454 @@
+# vertebra-hil: weryfikacja IP na sprzęcie z niezależnym partnerem
+
+Sep 22, 2026 · @Someone
+
+## 1. Cel i założenia
+
+Stanowisko sprawdza IP uruchomione na FPGA **niezależną implementacją tego samego protokołu w krzemie** (ESP32-S3). Uzupełnia symulację vertebry, nie zastępuje jej. Nazwa robocza: `vertebra-hil`.
+
+Po co. Wszystkie dotychczasowe testy (DUT, modele magistrali, monitory, para master–slave) napisał ten sam zespół na podstawie tej samej lektury specyfikacji. Wspólny błąd interpretacji przechodzi przez wszystkie warstwy na zielono. Peryferium ESP32 to druga, niezależna interpretacja, sprawdzona z tysiącami urządzeń.
+
+Do tego efekty, których symulacja nie ma: prawdziwie asynchroniczne zegary i jitter, synchronizator i metastabilność w krzemie, różnice między symulacją a syntezą (wartości początkowe, reset), opóźnienia IO.
+
+Zasady:
+
+- **PC myśli, urządzenia wykonują.** Scenariusze, konfiguracje i ocena wyniku są na PC. ESP32 i FPGA mają mały, stabilny zestaw komend. Nowy scenariusz nie wymaga flashowania ESP32 ani nowego bitstreamu.
+- **Precyzja czasowa lokalnie.** Wszystko, co wymaga trafienia w konkretny moment (reset w losowym miejscu ramki), robi urządzenie z seeda. UART służy tylko do sterowania.
+- **Samosynchronizujące się dane.** Płytki nie są synchronizowane w czasie; kolejność i poprawność są zakodowane w samych danych (§4).
+- **Wyrocznię też się weryfikuje.** ESP32 może się mylić. Spór między ESP32 a FPGA rozstrzyga trzeci świadek: logic analyzer.
+- **Harness to też IP.** Przechodzi własny testplan w symulacji, zanim trafi na płytkę.
+- **Generyczność tylko prosta.** Wspólne jest to, co nie zna protokołu: transport, komendy, rejestry, liczniki, orkiestracja. Wszystko, co zna protokół, jest per IP. Abstrakcje wydzielamy przy I2C, gdy widać drugi przypadek, a nie wcześniej.
+- **Jeden raport.** Testy sprzętowe to testpointy w `TestplanSuite`, z etapami i `unimplemented`, jak w symulacji.
+
+## 2. Zakres (I2S)
+
+Na sprzęcie sprawdzamy zgodność formatu z obcą implementacją i zachowanie przy prawdziwym zegarze. Złośliwe scenariusze, których ESP32 nie potrafi wygenerować, zostają w symulacji.
+
+Testpointy sprzętowe mają prefiks `hw_` i w `checking` odsyłają do testpointu symulacyjnego, który uzupełniają (np. `hw_slv_rx_frame` → `slv_rx_frame`).
+
+| Testpoint symulacyjny | Na sprzęcie | Jak |
+| --- | --- | --- |
+| `slv_tx_frame`, `slv_rx_frame`, `slv_full_duplex` | tak | ESP32 master → FPGA slave |
+| `i2s_tx_frame`, `i2s_rx_frame`, `i2s_full_duplex` | tak | FPGA master → ESP32 slave |
+| `*_ws_one_bit_delay` | tak, pośrednio | przesunięcie o bit psuje wzorzec (§4) |
+| `*_padding` | tak | ESP32: data 16 / 24 w slocie 32 |
+| `*_lsb_across_ws` | tak | data == slot: 16/16, 32/32 |
+| `*_word_length_mismatch` | tak | `data_bit_width` ESP32 ≠ `width` DUT-a |
+| `*_tx_underrun` | tak | luki z generatora FPGA |
+| `slv_startup_mid_frame`, `*_random_reset` | tak | reset DUT-a z FPGA, ESP32 zegaruje dalej |
+| `slv_sck_jitter` | częściowo | prawdziwy jitter ESP32 bez APLL, ale niesterowany |
+| `i2s_sck_ws_timing`, `i2s_sdo_on_sck_fall` | częściowo | logic analyzer, ograniczony rozdzielczością |
+| `slv_sck_pause`, `slv_variable_ws_period`, `*_rx_leading_edge_transmitter` | nie | tylko model w symulacji |
+
+Rzeczy możliwe tylko na sprzęcie, z własnymi testpointami:
+
+- `hw_soak`: długi bieg, np. 10 min przy 48 kHz = 28,8 mln ramek, zero błędów. Wyłapuje rzadkie zdarzenia metastabilności, niewidoczne w setkach ramek symulacji.
+- `hw_fs_fractional`: fs, którego PLL 160 MHz ESP32 nie dzieli równo (np. 44,1 kHz), więc BCLK z dzielnika ułamkowego ma prawdziwy jitter; do tego zegar z niezależnego kwarcu, bez wspólnej wielokrotności z zegarem FPGA.
+- `hw_clock_ratio_sweep`: seria fs / szerokości slotu, tak żeby stosunek SCK do zegara slave'a przeszedł od dużego do granicy `supportsSckHalf`.
+
+Poza zakresem: pomiary marginesu timingu w nanosekundach (wymaga oscyloskopu), TDM, więcej niż jeden partner na magistrali.
+
+## 3. Architektura
+
+Trzy programy i jeden kontrakt. PC steruje obiema płytkami po osobnych portach szeregowych; płytki rozmawiają ze sobą wyłącznie przez testowaną magistralę.
+
+```mermaid
+flowchart LR
+  PC["PC: orkiestrator<br/>TestplanSuite (Scala)"]
+  ESP["ESP32-S3<br/>firmware (ESP-IDF)"]
+  FPGA["Mimas V2<br/>harness + DUT (Spinal)"]
+  LA["Logic analyzer<br/>(sigrok)"]
+  PC -- "USB-CDC, komendy" --> ESP
+  PC -- "USB-UART, komendy" --> FPGA
+  ESP <-- "I2S: SCK, WS, SD x2" --> FPGA
+  LA -. "podgląd linii" .-> FPGA
+  PC -- "USB" --> LA
+```
+
+Logic analyzer jest opcjonalny w codziennym biegu i obowiązkowy przy sporach (§1).
+
+Przebieg jednego testu:
+
+1. `cfg` na obu płytkach: rola, fs, `width`, `slot`, seed, parametry scenariusza.
+2. `start` najpierw po stronie bez zegara (slave, odbiorniki), potem po stronie mastera.
+3. Czas T albo liczba ramek. Zdarzenia wymagające precyzji (reset DUT-a, luki) wykonuje lokalnie FPGA.
+4. `stop`, potem `stat` z obu stron.
+5. Ocena na PC: liczniki kontra oczekiwania scenariusza. Przy błędzie `dump` bufora wokół pierwszego błędu i dekodowanie go referencyjnym wzorcem.
+
+### Układ repozytorium
+
+Każdy z trzech programów ma swój katalog. Czwarty katalog, `contract/`, jest wspólny dla wszystkich trzech:
+
+| Katalog | Co to jest | Gdzie działa | Budowanie | Wspólne / per IP |
+| --- | --- | --- | --- | --- |
+| `vertebra-hil/host/` | orkiestrator: scenariusze, `cfg`/`start`/`stat`, ocena wyniku, raport `TestplanSuite` (§8) | PC (JVM) | sbt, projekt `hil` | `HilLink`, `HilSuite` wspólne, suity `hw_*` per IP |
+| `vertebra-hil/fpga/` | harness: most UART → rejestry, generator/checker, DUT-y (§6) | Mimas V2 (bitstream) | sbt, projekt `hilFpga` → Verilog → ISE → `.bin` | rdzeń wspólny, `I2sHarness` per IP |
+| `vertebra-hil/esp32/` | firmware partnera: komendy tekstowe, wzorzec, rola I2S (§7) | ESP32-S3 | ESP-IDF (`idf.py build flash`), poza sbt | `hil_cmd` wspólny, rola per IP |
+| `vertebra-hil/contract/` | specyfikacja wzorca i komend, wektory testowe (CSV) | — | — | wspólne + sekcja per IP |
+
+Cała logika testów siedzi w `host/`. Firmware ESP32 i harness FPGA znają tylko zestaw komend z §5 i nic nie wiedzą o scenariuszach.
+
+**Gdzie.** `vertebra-hil/` leży w workspace NewHope obok `vertebra` i projektów IP, a nie wewnątrz `vertebra`. Są dwa powody:
+
+- Harness instancjonuje DUT-y z `i2s`, a `i2s` zależy od `vertebra`. Umieszczenie harnessu w `vertebra` dałoby cykl zależności.
+- Od `vertebra` zależy każde IP, więc nie powinna ona ciągnąć jSerialComm ani syntezowalnego mostu UART.
+
+Katalog na harness nazywa się `fpga`, a nie `hw`: nazwa `hw` jest już zajęta przez `hw/gen` i prefiks testpointów `hw_`.
+
+```
+NewHope/
+  build.sbt
+  vertebra/                         biblioteka weryfikacji, bez zmian
+  i2s/
+  vertebra-hil/
+    contract/                       pattern.md, commands.md, vectors/ (etap 1)
+    fpga/                           sbt: hilFpga (hwSettings)
+      hw/spinal/main/               Config, HilEchoTop (etap 0); HilUartBridge, HilCoreRegs... (etap 2)
+      hw/spinal/main/i2s/           I2sHilRegs, I2sPatternGen/Check, I2sHarness
+      hw/spinal/test/               HilEchoTopTestplan (etap 0)
+      hw/spinal/test/i2s/           I2sHarnessTestplan
+      hw/gen/        (gitignore)    Verilog ze Spinala
+      hw/ise/                       .ucf, skrypt xtclsh / Makefile
+      hw/build/      (gitignore)    .bit / .bin
+    host/                           sbt: hil (srcLayout)
+      src/main/                     EchoProbe (etap 0); HilLink, HilDevice, HilBench, HilSuite...
+      src/test/i2s/                 I2sHilTestplan
+    esp32/                          ESP-IDF (CMake), poza sbt
+      CMakeLists.txt, sdkconfig.defaults
+      main/                         etap 0: echo USB-CDC; potem i2s_role.c
+      components/hil_cmd, hil_pattern
+    tools/                          flashowanie Mimas V2 (XMODEM), notatki o VM z ISE
+```
+
+**Pakiety i katalogi.** Kod wspólny należy do pakietu `newhope.vertebra.hil`, a kod znający I2S do `newhope.vertebra.hil.i2s`. Katalogi nie powtarzają pakietu: pliki leżą płasko w `hw/spinal/main/` i `src/main/`, a kod I2S w podkatalogu `i2s/`. Scala tego nie wymaga, a w podprojektach z jednym pakietem pełna ścieżka `newhope/vertebra/hil/` niczego by nie mówiła. Ten sam pakiet w dwóch podprojektach sbt (`hilFpga`, `hil`) Scali nie przeszkadza.
+
+**Podprojekty sbt.** W `build.sbt` `hwSettings` jest złożone z części, żeby host mógł wziąć tylko te, które mają dla niego sens:
+
+| Ustawienie | Zawartość | Kto używa |
+| --- | --- | --- |
+| `srcLayout` | `src/main`, `src/test` | `vertebra`, `hil` |
+| `hwLayout` | `hw/spinal/{main,test}` | moduły sprzętowe |
+| `forkSettings` | fork testów i `run`, katalog roboczy = katalog podprojektu, `-Xmx4g`, `envVars` z `vertebraEnv` | moduły sprzętowe, `hil` |
+| `hwSettings` | `hwLayout` + `forkSettings` + zależności Spinala, `publish / skip`, `simClean` | moduły sprzętowe, `hilFpga` |
+
+```scala
+lazy val hilFpga = (project in file("vertebra-hil/fpga"))
+  .dependsOn(vertebra, mimas_v2)        // + i2s w etapie 2
+  .settings(hwSettings, name := "vertebra-hil-fpga")
+
+lazy val hil = (project in file("vertebra-hil/host"))
+  .dependsOn(vertebra, hilFpga)         // I2sHilRegs: jedna mapa dla harnessu i hosta
+  .settings(
+    name := "vertebra-hil-host",
+    srcLayout,
+    forkSettings,
+    libraryDependencies ++= spinal ++ Seq(scalatest, jSerialComm),
+    Test / parallelExecution := false,  // jedno stanowisko
+    publish / skip := true
+  )
+```
+
+Dlaczego dwa podprojekty, a nie jeden:
+
+- Szeregowe wykonanie jest potrzebne tylko suitom sprzętowym. Symulacje `I2sHarnessTestplan` w `hilFpga` dalej biegną równolegle.
+- Host nie jest Spinalem, więc nie dostaje `hw/spinal` ani `simClean`.
+- `scalatest` jest w hoście w zakresie compile, jak w `vertebra`, bo `HilSuite` w `src/main` rozszerza `TestplanSuite`.
+
+Oba podprojekty są w `root.aggregate`. Bez stanowiska testy `hw_*` są *canceled* (§8), więc `sbt test` zostaje zielony.
+
+**Konsekwencje dla budowania.**
+
+- `Config.spinal` generuje do `hw/gen` względem katalogu roboczego. Przy forku z `forkSettings` Verilog harnessu trafia sam do `vertebra-hil/fpga/hw/gen`, a `simClean` działa bez zmian.
+- `hilFpga` ma własny `newhope.vertebra.hil.Config` w `fpga/hw/spinal/main/`, jak każdy moduł sprzętowy (`TESTING-STRATEGY.md` §2.3). `HilEchoTop` go używa, więc `hilFpga` nie zależy od `i2c`. W etapie 2 dochodzi zależność od `i2s` z jego `newhope.i2s.Config`; pakiety są różne, więc nazwy się nie zderzają. Host nie ma `Config`: nie generuje Veriloga ani nie symuluje.
+
+Do `.gitignore`: `vertebra-hil/fpga/hw/gen/`, `vertebra-hil/fpga/hw/build/`, `vertebra-hil/esp32/build/`, `vertebra-hil/esp32/sdkconfig`.
+
+## 4. Kontrakt: wzorzec danych
+
+Każde słowo niesie numer ramki, kanał i wartość kontrolną, więc odbiorca sam odtwarza kolejność bez synchronizacji czasowej z nadawcą. Wzorzec jest zaimplementowany trzy razy (Spinal, C, Scala) i dlatego jest trywialny.
+
+Słowo o szerokości W dla ramki n i kanału c (0 = L, 1 = R), od MSB:
+
+| Bity | Pole | Po co |
+| --- | --- | --- |
+| W-1 | `c` | zamiana kanałów widoczna nawet po obcięciu słowa; ramka nigdy nie jest ciszą (R ≠ 0) |
+| kolejne S bitów | `n mod 2^S` | kolejność; S = min(8, W/2 - 1), czyli 3 dla W=8, 7 dla W=16, 8 dla W≥24 |
+| reszta, do LSB | młodsze bity `h(n, c, seed)` | przesunięcie o bit i przekłamania w młodszych bitach |
+
+Seq i kanał są w najstarszych bitach celowo: MSB-first przenosi je przez każdą zmianę długości słowa (`word_length_mismatch`, padding).
+
+Hash to jeden krok xorshift32 na `x = ((n << 1) | c) ^ seed`: `x ^= x << 13; x ^= x >> 17; x ^= x << 5`. Same XOR-y, więc na FPGA to kombinacyjne okablowanie bez DSP.
+
+Odbiorca nie porównuje surowego słowa, tylko `transfer(wzorzec_Wtx, Wtx, slot, Wrx)`: tę samą funkcję, którą liczy scoreboard w symulacji (`I2sBusMaster.transfer`). Parametry nadawcy dostaje w `cfg`.
+
+Algorytm checkera (identyczny w FPGA i w ESP32):
+
+1. **Lock**: pierwsza ramka, w której oba kanały są dokładnie równe oczekiwanym dla `n` odczytanego z pola seq, potwierdzona przez 2 kolejne ramki. Wcześniejsze ramki (zera z pustego DMA, ramka częściowa) się nie liczą.
+2. Po locku oczekiwana jest ramka `n + 1`. Cisza (oba kanały 0) to luka i nie zużywa numeru: generator zwiększa `n` tylko przy handshake'u.
+3. Niezgodność: licznik błędów, zapis pierwszego błędu (numer ramki, got, exp), próba ponownego locka. Relock liczony osobno: oznacza zgubioną albo zdublowaną ramkę.
+
+Liczniki checkera: `frames` (zgodne), `bad`, `gaps`, `relocks`, `lock_at`, `first_err`. Scenariusz na PC decyduje, które wartości są dopuszczalne: `gaps > 0` jest błędem przy ciągłym zasilaniu, a oczekiwanym wynikiem w `hw_tx_underrun`.
+
+Wektory testowe w `contract/vectors/`:
+
+- `pattern.csv`: `seed, n, c, W, word` dla W ∈ {8, 16, 24, 32}, w tym n przechodzące przez zawinięcie pola seq.
+- `transfer.csv`: `word, Wtx, slot, Wrx, wynik`, w tym oba kierunki niedopasowania długości.
+
+Te same pliki czytają: test jednostkowy Scali, test generatora Spinal w symulacji i test na ESP32 uruchamiany komendą `selftest`.
+
+Znane ograniczenie: gdy odbiorca widzi tylko najstarsze bity (słowo o połowę krótsze), hash zostaje obcięty i przesunięcie o bit wykrywa już tylko pole seq. Dla tych przypadków granicę wykrywalności wypisuje test `hw_param_bounds` (§8).
+
+## 5. Kontrakt: komendy
+
+Na kablu są dwa protokoły, bo tak jest prościej: ESP32 mówi tekstem, FPGA binarnym dostępem do rejestrów. Na PC oba są schowane za jednym interfejsem `HilDevice` (§8), więc scenariusz ich nie rozróżnia.
+
+Powód: parsowanie tekstu `klucz=wartość` w RTL to dużo logiki i błędów, a soft-CPU (VexRiscv) na XC6SLX9 to dodatkowy toolchain dla jednej funkcji. Most UART → rejestry jest mały, a mapę rejestrów definiuje raz obiekt Scali, używany i przy elaboracji harnessu, i przez hosta.
+
+### ESP32: tekst, liniami
+
+Linia ASCII zakończona `\n`, odpowiedź `ok ...` albo `err <kod> <opis>`. Liczniki dziesiętnie, słowa danych szesnastkowo.
+
+```
+ver                                         -> ok proto=1 dev=esp32s3 ip=i2s build=3f2a9c1
+cfg role=master fs=48000 w=16 slot=32 seed=42 -> ok
+start                                       -> ok
+stat                                        -> ok frames=48000 bad=0 gaps=0 relocks=0 lock_at=3 first_err=-
+stop                                        -> ok
+dump                                        -> ok n=16 / 16 linii: idx got_l got_r exp_l exp_r / ok end
+selftest                                    -> ok vectors=512
+```
+
+Nieznany klucz w `cfg` to `err`, nie ignorowanie: literówka ma przerwać test, tak jak `testpoint()` z nazwą spoza planu.
+
+### FPGA: binarny most do rejestrów
+
+| Ramka | Bajty |
+| --- | --- |
+| zapis | `0xA5`, `0x02`, adres (u16 BE), dane (u32 BE), suma XOR |
+| odczyt | `0xA5`, `0x01`, adres (u16 BE), suma XOR |
+| odpowiedź | `0x5A`, status, dane (u32 BE), suma XOR |
+
+Mapa rejestrów (słowa 32-bitowe):
+
+| Adres | Blok | Wspólny / per IP |
+| --- | --- | --- |
+| `0x000`–`0x00F` | magic, wersja protokołu, id IP, hash gita z elaboracji, `ctrl` (start, stop, soft reset), `status` | wspólny |
+| `0x010`–`0x01F` | liczniki checkera w układzie z §4 | wspólny układ |
+| `0x020`–`0x03F` | generator: seed, luki (co ile ramek, ile, losowo z seeda) | wspólny układ |
+| `0x040`–`0x04F` | reset DUT-a: liczba, seed, zakres opóźnienia, długość | wspólny |
+| `0x100`–`0x1FF` | konfiguracja IP (I2S: rola, `width`, dla mastera wybór dzielnika) | per IP |
+| `0x1000`– | bufor przechwytywania wokół pierwszego błędu | wspólny |
+
+Na host i na harness składa się ten sam `object I2sHilRegs`. Adres jest stałą Scali, więc rozjazd mapy to błąd kompilacji, a nie wieczór z oscyloskopem.
+
+### Pierwsza komenda sesji
+
+Orkiestrator zawsze zaczyna od `ver` / odczytu `0x000`–`0x003` i porównuje wersję protokołu, id IP i hash builda z tym, co zna. Niezgodny firmware ESP32 przerywa suitę z komunikatem, co przeflashować. Niezgodny bitstream FPGA orkiestrator może wgrać sam (§8).
+
+## 6. Harness FPGA
+
+Jeden bitstream na IP, zawierający wspólny rdzeń (UART, rejestry, liczniki, bufor, wstrzykiwanie resetu) i część I2S (oba DUT-y, generator, checker, multipleks pinów). Rola master/slave jest rejestrem, nie osobnym bitstreamem.
+
+### Płytka: co z niej wynika
+
+Z [dokumentacji Mimas V2](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/):
+
+- **XC6SLX9 (CSG324).** Mały układ, więc zajętość trzeba sprawdzić po pierwszej syntezie. Plan awaryjny: osobne bitstreamy dla roli master i slave.
+- **Toolchain: ISE 14.7.** Spartan-6 nie jest wspierany przez Vivado. Spinal generuje Verilog, ISE robi resztę z `-g binary`; `.bin` idzie do flash przez XMODEM (`programmer.py` z repozytorium firmware albo `sx`).
+- **UART 115200 przez PIC z firmware [jimmo/numato-mimasv2-pic-firmware](https://github.com/jimmo/numato-mimasv2-pic-firmware).** Płytka wystawia dwa porty USB: jeden do programowania flash SPI (XMODEM), drugi to UART FPGA. Przełącznik SW7 przestaje być potrzebny, więc flashowanie i testy mogą iść z jednego skryptu bez ręcznej obsługi. Przy 115200 odczyt liczników to kilka ms, a zrzut bufora ułamek sekundy. Baud zostaje generykiem harnessu, na wypadek płytki z fabrycznym firmware (19200).
+- **32 GPIO na złączach P6–P9.** Piny P9 leżą w banku 1 dzielonym z LPDDR: napięcie tego banku trzeba sprawdzić w schemacie, a do czasu sprawdzenia używamy tylko P6–P8.
+- **Oscylator:** częstotliwość do potwierdzenia w schemacie (zakładamy 100 MHz).
+
+### Zegary
+
+| Domena | Źródło | Po co |
+| --- | --- | --- |
+| `sys` | oscylator | UART, most, rejestry |
+| `dut` | DCM\_CLKGEN z `sys`, M/D z rejestru | DUT, generator, checker |
+
+Master potrzebuje zegara audio (24,576 / 49,152 MHz). Ze 100 MHz dokładnie się go nie da uzyskać (M/D = 768/3125), więc DCM daje przybliżenie w granicach 0,1%. `I2sGenerics` dostaje wartość nominalną, dzielnik jest całkowity, a fs na pinach odbiega od nominalnego o tę samą odchyłkę. ESP32 jako slave nie zna fs z góry, więc to nie przeszkadza. Jeśli kiedyś będzie trzeba dokładnego fs: zewnętrzny oscylator audio na pinie GCLK złącza P7.
+
+Dla slave'a M/D ustawiane z rejestru daje `hw_clock_ratio_sweep`: ten sam SCK z ESP32, zegar DUT-a przesuwany aż do granicy `supportsSckHalf`.
+
+Zasada CDC: konfiguracja zmienia się tylko w stanie `stop`, a liczniki czyta się po `stop` przez rejestr zatrzaskiwany w domenie `dut` i synchronizowany do `sys`. Żadnych dynamicznych przejść między domenami w trakcie biegu.
+
+### Komponenty
+
+| Komponent | Wspólny / per IP | Opis |
+| --- | --- | --- |
+| `HilUartBridge` | wspólny | `UartCtrl` ze spinal.lib + parser ramek z §5, wystawia Apb3 |
+| `HilCoreRegs` | wspólny | id, hash gita, ctrl/status; `Apb3SlaveFactory` |
+| `HilCounters` | wspólny | liczniki checkera w układzie z §4, snapshot przy `stop` |
+| `HilCapture[T]` | wspólny, generyczny po payloadzie | BRAM, okno ramek wokół pierwszego błędu (got i exp) |
+| `HilResetInjector` | wspólny | N resetów DUT-a, opóźnienie z LFSR w zakresie z rejestru |
+| `I2sPatternGen` | per IP | wzorzec z §4 → `io.tx`, luki z rejestru |
+| `I2sPatternCheck` | per IP | `io.rx` → `transfer()` + algorytm locka z §4 |
+| `I2sHarness` | per IP, top-level | oba DUT-y, multipleks pinów (SCK/WS jako tri-state), składa całość |
+
+Generator i checker są per IP, bo znają ramkę I2S. Wspólny jest tylko układ liczników, który czyta host. Czy wydzielić z nich wspólną abstrakcję, rozstrzygnie dopiero I2C.
+
+### Harness w symulacji
+
+`I2sHarness` to zwykłe IP w sensie vertebry: ma `I2sHarnessTestplan` z własnymi testpointami (most UART, mapa rejestrów, generator == wektory z `pattern.csv`, checker wykrywa wstrzyknięte błędy: zamianę kanałów, przesunięcie o bit, zgubioną i zdublowaną ramkę). Rolę ESP32 gra w nim `I2sBusMaster` / `I2sCodecModel`, a rejestry obsługuje `UartEncoder` / `UartDecoder` ze `spinal.lib.com.uart.sim`. Na płytkę idzie tylko bitstream z zielonym testplanem harnessu.
+
+## 7. Firmware ESP32-S3
+
+ESP-IDF 5.x i nowy driver `i2s_std` w trybie Philips. Firmware nie zna scenariuszy: konfiguruje kanał, nadaje wzorzec, sprawdza wzorzec i raportuje liczniki.
+
+### Co wiemy o peryferium
+
+- [ESP32-S3 ma dwa kontrolery I2S](https://docs.espressif.com/projects/esp-idf/en/v5.2/esp32s3/api-reference/peripherals/i2s.html). Ustawienie DIN i DOUT na ten sam GPIO daje wewnętrzną pętlę, co wykorzystuje `selftest`.
+- [RX i TX jednego kontrolera dzielą zegar](https://docs.espressif.com/projects/esp-idf/en/stable/api-reference/peripherals/i2s.html), więc full duplex wymaga tej samej konfiguracji w obu kierunkach. Scenariusze z różną długością słowa w obie strony robimy jako dwa biegi simplex.
+- **S3 nie ma APLL**: źródłem jest PLL 160 MHz przez dzielnik ułamkowy. Dla fs, które nie dzielą się równo (44,1 kHz), dostajemy jitter dzielnika. Dla testu slave'a to zaleta.
+- Zgłoszenie [esp-idf #9513](https://github.com/espressif/esp-idf/issues/9513) opisuje dwa ograniczenia S3 w trybie slave: zegar modułu musi być co najmniej 8× BCLK (przy 160 MHz daje to BCLK ≤ 20 MHz, z zapasem) oraz niestabilne wyrównanie kanałów względem WS w slave full duplex (tam w trybie TDM). To drugie trzeba sprawdzić w etapie 3, zanim uwierzymy ESP32 jako slave'owi (§11).
+
+### Struktura
+
+| Moduł | Wspólny / per IP | Opis |
+| --- | --- | --- |
+| `components/hil_cmd` | wspólny | USB-CDC (natywne USB S3), parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami |
+| `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4; wektory z `contract/` wbudowane przez `EMBED_FILES` |
+| `main/i2s_role.c` | per IP | konfiguracja kanału z `cfg`, task TX (wzorzec → `i2s_channel_write`), task RX (`i2s_channel_read` → checker) |
+
+Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start` / `stop` / `stat`. Dla I2C dojdzie `main/i2c_role.c`, a `hil_cmd` zostaje bez zmian.
+
+### Szczegóły, które trzeba zrobić dobrze
+
+- **Pakowanie próbek w buforze DMA** zależy od `data_bit_width` (zwłaszcza 24 bity). Nie zgadujemy: `selftest` w pętli wewnętrznej i logic analyzer rozstrzygają, co faktycznie wychodzi na linię.
+- **Początek biegu**: pierwsze ramki TX to zera z pustego DMA, pierwsze bufory RX to śmieci. Oba przypadki obsługuje lock checkera, a nie firmware.
+- **Przepustowość checkera**: najgorszy przypadek to 96 kHz × 2 × 32 bity, około 192 tys. słów/s. Jeden xorshift i porównanie na słowo przy 240 MHz to mały ułamek CPU. Przepełnienie DMA RX jest raportowane jako osobny licznik `overflow`, żeby nie udało błędu DUT-a.
+- **Piny**: zwykłe GPIO z dala od pinów strapping (0, 3, 45, 46), USB (19, 20) i pamięci modułu. Konkretne numery do ustalenia pod posiadany dev board.
+- **`ver`** zwraca wersję protokołu i wersję aplikacji z `esp_app_desc` (hash gita).
+
+## 8. Orkiestrator PC
+
+Orkiestrator to suita `TestplanSuite` w Scali, w podprojekcie sbt `hil` (`vertebra-hil/host`, §3). Testy sprzętowe mają plan, etapy, warianty i `unimplemented` jak w symulacji, a wynik trafia do tego samego raportu.
+
+### Warstwy
+
+| Klasa | Wspólna / per IP | Opis |
+| --- | --- | --- |
+| `HilLink` | wspólna | port szeregowy (jSerialComm), timeouty, ponowienie przy błędzie sumy, log całego ruchu do pliku per test |
+| `HilDevice` | wspólny trait | `info`, `cfg(Map)`, `start`, `stop`, `stat: HilStat`, `dump` |
+| `EspDevice` | wspólna | `HilDevice` po protokole tekstowym |
+| `FpgaDevice[R]` | wspólna, generyczna po mapie rejestrów | `HilDevice` po moście binarnym; klucze `cfg` mapowane na rejestry przez `R` (np. `I2sHilRegs`) |
+| `HilBench` | wspólna | znajduje porty (`VERTEBRA_HIL_ESP`, `VERTEBRA_HIL_FPGA`), sprawdza wersje (§5), jedna instancja na JVM |
+| `HilSuite` | wspólna | `TestplanSuite` + `hwScenario(name, variant)(body)` |
+| `I2sHilTestplan` | per IP | plan `hw_*`, konfiguracje, scenariusze |
+
+Dzięki firmware PIC z osobnym portem programowania (§6) `HilBench` może sam utrzymywać płytkę w zgodności z kodem: gdy hash builda odczytany z rejestrów różni się od hasha świeżo zbudowanego `.bin`, wgrywa go przez XMODEM, czeka na restart FPGA i ponawia `ver`. Porty: `VERTEBRA_HIL_FPGA_PROG` (programowanie) i `VERTEBRA_HIL_FPGA` (UART).
+
+`HilStat` to case class z licznikami z §4 plus `overflow`. Scenariusz kończy się jedną z nazwanych asercji, np. `expectClean(minFrames)` albo `expectGaps(exact)`. Przy błędzie `hwScenario` sam robi `dump` z obu stron i dekoduje bufor referencyjnym wzorcem, żeby komunikat mówił „ramka 1532: kanały zamienione”, a nie „bad=1”.
+
+### Brak stanowiska to nie błąd
+
+Bez podłączonego stanowiska testy `hw_*` są rejestrowane normalnie, a ciało testu robi `assume(bench.isDefined, ...)`. ScalaTest oznacza je jako *canceled*, a nie *failed*. Kompletność liczy je jako zaimplementowane, bo test istnieje. Dzięki temu `sbt test` na laptopie bez płytek zostaje zielony, a raport jasno pokazuje, co nie było uruchomione.
+
+### Plan I2S (szkic)
+
+| Testpoint | Etap | Role | Uzupełnia |
+| --- | --- | --- | --- |
+| `hw_param_bounds` | V1 | — | granice bez sprzętu: M/D DCM, `supportsSckHalf` przy realnym zegarze, BCLK ≤ 20 MHz dla ESP32 slave, wykrywalność wzorca |
+| `hw_link` | V1 | obie | `ver`, zapis i odczyt rejestrów, `selftest` na obu płytkach |
+| `hw_slv_rx_frame`, `hw_slv_tx_frame` | V1 | ESP master | `slv_rx_frame`, `slv_tx_frame` |
+| `hw_mst_rx_frame`, `hw_mst_tx_frame` | V1 | FPGA master | `i2s_rx_frame`, `i2s_tx_frame` |
+| `hw_full_duplex` | V2 | obie | `*_full_duplex` |
+| `hw_padding`, `hw_lsb_across_ws`, `hw_word_length_mismatch` | V2 | obie | odpowiedniki symulacyjne |
+| `hw_tx_underrun` | V2 | obie | `*_tx_underrun` |
+| `hw_fs_fractional` | V2 | ESP master | `slv_sck_jitter` |
+| `hw_la_crosscheck` | V2 | obie | logic analyzer zgadza się z obiema płytkami |
+| `hw_startup_mid_frame`, `hw_random_reset` | V3 | obie | `slv_startup_mid_frame`, `*_random_reset` |
+| `hw_clock_ratio_sweep` | V3 | ESP master | `supportsSckHalf` na krzemie |
+| `hw_soak` | V3 | obie | —, tylko sprzęt |
+
+Konfiguracje są jawną listą, jak w symulacji: typowe 48 kHz / 16 w 32, 44,1 kHz / 24 w 32, 16/16 i 32/32 bez paddingu oraz dolna granica zegara DUT-a slave'a.
+
+Uruchamianie:
+
+```
+sbt "hil/testOnly *I2sHilTestplan"                   # cały plan
+sbt "hil/testOnly *I2sHilTestplan -- -z hw_slv"      # tylko rola slave
+sbt "hil/testOnly *I2sHilTestplan -- -z param"       # bez sprzętu
+```
+
+Suity `hil` nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecution := false` w tym podprojekcie.
+
+## 9. Stanowisko
+
+Cztery linie sygnałowe, jedna linia wyzwalania i masa. Linie danych mają stały kierunek fizyczny niezależnie od roli; kierunek zmieniają tylko SCK i WS.
+
+| Linia | Kierunek | Mimas V2 (propozycja) | Uwagi |
+| --- | --- | --- | --- |
+| SCK | zależy od roli | P7-1 (U8) | 100 Ω szeregowo |
+| WS | zależy od roli | P7-2 (V8) | 100 Ω szeregowo |
+| SD\_E2F | ESP DOUT → FPGA | P7-3 (R8) | harness kieruje ją do `sdi` mastera albo wejścia danych slave'a |
+| SD\_F2E | FPGA → ESP DIN | P7-4 (T8) | 33 Ω szeregowo przy FPGA |
+| TRIG | FPGA → logic analyzer | P7-5 (R5) | impuls przy pierwszym błędzie checkera |
+| GND | — | P7-9, P7-10 | co najmniej dwa przewody masy |
+
+Numery pinów FPGA pochodzą z [tabeli złącz Mimas V2](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/). P7 leży w banku 2; zanim cokolwiek podłączymy, schemat musi potwierdzić VCCO = 3,3 V dla tego banku. Piny ESP32-S3 dobieramy pod konkretny dev board (§7).
+
+Zasady:
+
+- **Zmiana roli bez konfliktu.** Przy przełączaniu master/slave orkiestrator najpierw ustawia obie strony w `stop` z SCK/WS w wysokiej impedancji, dopiero potem konfiguruje nową rolę. Rezystory 100 Ω na SCK i WS ograniczają prąd, gdyby doszło do krótkiego konfliktu, i tłumią odbicia.
+- **Kable krótkie**, do ok. 15 cm, taśma z masą między liniami sygnałowymi. Podwójne zbocze na SCK od dzwonienia to błąd stanowiska, nie IP; `hw_la_crosscheck` ma to wykluczyć.
+- **Zasilanie** obu płytek z jednego zasilanego huba USB, żeby nie mieć pętli masy przez dwa porty PC.
+
+### Logic analyzer
+
+Do dekodowania I2S w sigroku wystarczy tani analizator 8 kan./24 MS/s przy BCLK do ok. 3 MHz (ok. 8 próbek na bit). Konfiguracja 96 kHz / 32 bity daje BCLK 6,144 MHz, czyli ok. 4 próbki na bit, co jest na granicy. Do tych konfiguracji i do jakichkolwiek pomiarów timingu potrzebny jest analizator ≥ 100 MS/s. Linia TRIG pozwala ustawić wyzwalanie dokładnie na pierwszym błędzie checkera FPGA.
+
+## 10. Plan wykonania
+
+Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcze nie ufamy; poprzednie są już sprawdzone. Etap kończy się, gdy jego kryterium jest spełnione, a nie gdy kod jest napisany.
+
+| # | Etap | Zakres | Kryterium ukończenia |
+| --- | --- | --- | --- |
+| 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hilFpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-CDC; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-CDC na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
+| 1 | Kontrakt | specyfikacja wzorca i `transfer()`, implementacja referencyjna w Scali, generowane `pattern.csv` i `transfer.csv` | testy jednostkowe Scali zielone, wektory w repo |
+| 2 | Harness w symulacji | `HilUartBridge`, `HilCoreRegs`, `HilCounters`, `HilCapture`, `HilResetInjector`, `I2sPatternGen`/`Check`, `I2sHarness` | `I2sHarnessTestplan` zielony, włącznie z wstrzykniętymi błędami; synteza w ISE z zapisaną zajętością i spełnionym timingiem |
+| 3 | ESP32 samo | `hil_cmd`, `hil_pattern`, `i2s_role`; `selftest` na wektorach i w pętli wewnętrznej; wyjście mastera zdekodowane w sigroku; slave sprawdzony przez drugi kontroler I2S tego samego S3 jako mastera | sigrok zgadza się z wzorcem dla 16/32, 24/32, 16/16, 32/32; slave przez 10^6 ramek bez błędu wyrównania kanałów |
+| 4 | Host | `HilLink`, `EspDevice`, `FpgaDevice`, `HilBench`, `HilSuite`; testpointy `hw_param_bounds`, `hw_link` | `hw_link` zielony na stanowisku, *canceled* bez niego |
+| 5 | Pierwszy test end-to-end | `hw_slv_rx_frame`, potem `hw_slv_tx_frame`, jedna konfiguracja | 10^6 ramek, zero błędów, `hw_la_crosscheck` zgodny |
+| 6 | I2S V1 i V2 | wszystkie konfiguracje, obie role, padding, niedopasowanie długości, underrun, fs ułamkowe | V1 kompletny w `testplan completeness`; V2 zrobiony albo `unimplemented` z powodem |
+| 7 | I2S V3 | reset DUT-a w losowym momencie, `hw_clock_ratio_sweep` (dynamiczne M/D DCM\_CLKGEN), `hw_soak` | 10 min soak na każdą rolę bez błędu; znaleziona granica zegara slave'a zgodna z `supportsSckHalf` |
+
+Etapy 2 i 3 są niezależne i mogą iść równolegle.
+
+### Potem I2C
+
+Przy I2C bez zmian powinny przejść: `HilLink`, `HilDevice`, `HilBench`, `HilSuite`, `hil_cmd`, most UART, rejestry rdzenia, liczniki, bufor przechwytywania i wstrzykiwanie resetu. Nowe będą: wzorzec transakcji zamiast ramek, `I2cHarness`, `main/i2c_role.c`, `I2cHilTestplan` oraz elektryka open-drain (pull-upy, czasy narastania, clock stretching przez ESP32), czyli to, czego symulacja nie ma wcale.
+
+Dopiero wtedy decydujemy o refaktorze: co z generatorów, checkerów i wzorca da się wspólnie opisać. Miarą sukcesu jest dodanie I2C bez zmian w części wspólnej poza poprawkami błędów; każda wymuszona zmiana to wpis na liście refaktorów.
+
+Po etapie 5 `TESTING-STRATEGY.md` dostaje sekcję o testach sprzętowych i wiersz `I2sHilTestplan` w tabeli z §8.
+
+## 11. Ryzyka i otwarte pytania
+
+Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z wyrównaniem kanałów, a wtedy kierunek „FPGA master → ESP slave” trzeba będzie oprzeć na innym partnerze.
+
+| Ryzyko | Skutek | Co robimy |
+| --- | --- | --- |
+| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | sprawdzenie w etapie 3 przez drugi kontroler; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
+| Oba DUT-y nie mieszczą się w XC6SLX9 | brak wspólnego bitstreamu | dwa bitstreamy (master, slave), ta sama mapa rejestrów |
+| ISE 14.7 na współczesnym systemie | tarcie przy budowaniu | VM albo kontener z ISE, build ze skryptu |
+| Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |
+| fs mastera z DCM tylko przybliżone | fs na pinach odbiega o ≤ 0,1% | generyki z wartością nominalną; zewnętrzny oscylator audio, jeśli któryś test będzie tego wymagał |
+| Artefakty okablowania (dzwonienie, masa) | błędy przypisane IP | krótkie kable, rezystory, `hw_la_crosscheck` |
+| Obcięte słowa ukrywają część błędów (§4) | słabsza detekcja w `word_length_mismatch` | `hw_param_bounds` wypisuje granicę wykrywalności per konfiguracja |
+
+Otwarte pytania:
+
+- [ ] Częstotliwość oscylatora Mimas V2 i VCCO banku 2 (ze schematu).
+- [ ] Który dev board ESP32-S3 (piny wolne od strapping, USB i pamięci modułu).
+- [ ] Jaki logic analyzer jest dostępny i czy obsłuży BCLK 6,144 MHz.
+- [ ] Zajętość XC6SLX9 z oboma DUT-ami: po pierwszej syntezie w etapie 2.
+- [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
+- [ ] Kandydat na partnera zapasowego, gdyby S3 slave okazał się niewiarygodny.
+
+## Źródła
+
+- [Mimas V2 – dokumentacja Numato](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/)
+- [ESP-IDF: I2S dla ESP32-S3 (v5.2)](https://docs.espressif.com/projects/esp-idf/en/v5.2/esp32s3/api-reference/peripherals/i2s.html)
+- [ESP-IDF: I2S, zegary i full duplex](https://docs.espressif.com/projects/esp-idf/en/stable/api-reference/peripherals/i2s.html)
+- [esp-idf #9513: slave full duplex na S3](https://github.com/espressif/esp-idf/issues/9513)

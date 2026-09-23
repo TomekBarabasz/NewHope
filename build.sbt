@@ -7,6 +7,7 @@ val spinalCore       = "com.github.spinalhdl" %% "spinalhdl-core" % spinalVersio
 val spinalLib        = "com.github.spinalhdl" %% "spinalhdl-lib"  % spinalVersion
 val spinalIdslPlugin = compilerPlugin("com.github.spinalhdl" %% "spinalhdl-idsl-plugin" % spinalVersion)
 val scalatest        = "org.scalatest" %% "scalatest" % "3.2.19"
+val jSerialComm      = "com.fazecast" % "jSerialComm" % "2.11.0"
 val spinal           = Seq(spinalCore, spinalLib, spinalIdslPlugin)
 
 lazy val wavesOn     = taskKey[Unit]("FST wlaczone dla tej sesji sbt")
@@ -33,11 +34,27 @@ def cleanDir(d : File, log : Logger) : Unit =
     log.info(s"usunieto ${d.getName} ($n plikow)")
   } else log.info(s"${d.getName}: nie ma czego usuwac")
 
-/** Wspolne ustawienia modulu sprzetowego. */
-def hwSettings : Seq[Setting[_]] = Seq(
-  Compile / scalaSource := baseDirectory.value / "hw/spinal/main",
-  Test    / scalaSource := baseDirectory.value / "hw/spinal/test",
+/** Zmienne srodowiska dla forkowanej JVM. MUSI byc def i MUSI byc wolane
+  * wewnatrz envVars ++= (task): sys.props czyta sie wtedy przy kazdym
+  * uruchomieniu, wiec wavesOn/backendGhdl dzialaja bez reload. */
+def vertebraEnv : Map[String, String] = Map(
+  "VERTEBRA_WAVES"   -> sys.props.getOrElse("vertebra.waves",   "0"),
+  "VERTEBRA_BACKEND" -> sys.props.getOrElse("vertebra.backend", "verilator"))
 
+/** Uklad katalogow biblioteki: src/main, src/test (bez /scala). */
+def srcLayout : Seq[Setting[_]] = Seq(
+  Compile / scalaSource := baseDirectory.value / "src/main",
+  Test    / scalaSource := baseDirectory.value / "src/test"
+)
+
+/** Uklad katalogow modulu sprzetowego: hw/spinal/{main,test}, RTL w hw/gen. */
+def hwLayout : Seq[Setting[_]] = Seq(
+  Compile / scalaSource := baseDirectory.value / "hw/spinal/main",
+  Test    / scalaSource := baseDirectory.value / "hw/spinal/test"
+)
+
+/** Fork testow i run z katalogiem roboczym = katalog podprojektu. */
+def forkSettings : Seq[Setting[_]] = Seq(
   // fork MUSI byc tutaj, nie luzem na koncu pliku - patrz wyzej
   Test / fork          := true,
   Test / baseDirectory := baseDirectory.value,
@@ -50,16 +67,15 @@ def hwSettings : Seq[Setting[_]] = Seq(
   // envVars jest TASKIEM, wiec sys.props czyta sie przy kazdym uruchomieniu.
   // To most miedzy JVM sbt (gdzie siedza wavesOn/backendGhdl) a forkowana
   // JVM testu. javaOptions byloby SettingKey i zamrozilo wartosc.
-  Test / envVars ++= Map(
-    "VERTEBRA_WAVES"   -> sys.props.getOrElse("vertebra.waves",   "0"),
-    "VERTEBRA_BACKEND" -> sys.props.getOrElse("vertebra.backend", "verilator")),
-  Compile / run / envVars ++= Map(
-    "VERTEBRA_WAVES"   -> sys.props.getOrElse("vertebra.waves",   "0"),
-    "VERTEBRA_BACKEND" -> sys.props.getOrElse("vertebra.backend", "verilator")),
+  Test          / envVars ++= vertebraEnv,
+  Compile / run / envVars ++= vertebraEnv,
+)
 
+/** Wspolne ustawienia modulu sprzetowego. */
+def hwSettings : Seq[Setting[_]] = hwLayout ++ forkSettings ++ Seq(
   libraryDependencies ++= spinal :+ (scalatest % Test),
   publish / skip := true,
-  
+
   // Wersja zachowująca cache, czyli kasująca tylko workspace'y przebiegów
   simClean := {
     val log = streams.value.log
@@ -76,8 +92,7 @@ def hwSettings : Seq[Setting[_]] = Seq(
 lazy val vertebra = (project in file("vertebra"))
   .settings(
     name := "vertebra",
-    Compile / scalaSource := baseDirectory.value / "src/main",
-    Test    / scalaSource := baseDirectory.value / "src/test",
+    srcLayout,
     libraryDependencies ++= spinal :+ scalatest
   )
   
@@ -117,6 +132,30 @@ lazy val uartdemo = (project in file("uart_demo"))
   .dependsOn(vertebra, mimas_v2)
   .settings(hwSettings)
 
+// ---------------------------------------------------------------------
+//  vertebra-hil: weryfikacja IP na sprzecie (vertebra-hil.md)
+// ---------------------------------------------------------------------
+
+/** Harness FPGA: Spinal -> Verilog (hw/gen) -> ISE. Zwykly modul sprzetowy,
+  * symulacje harnessu moga biec rownolegle. Zaleznosc od IP (i2s) dochodzi
+  * w etapie 2. */
+lazy val hilFpga = (project in file("vertebra-hil/fpga"))
+  .dependsOn(vertebra, mimas_v2, i2s, i2c)
+  .settings(hwSettings, name := "vertebra-hil-fpga")
+
+/** Orkiestrator PC: porty szeregowe, suity hw_*. Kod nie jest sprzetem,
+  * wiec uklad katalogow jak w vertebrze. Jedno stanowisko -> testy szeregowo. */
+lazy val hil = (project in file("vertebra-hil/host"))
+  .dependsOn(vertebra, hilFpga)
+  .settings(
+    name := "vertebra-hil-host",
+    srcLayout,
+    forkSettings,
+    libraryDependencies ++= spinal ++ Seq(scalatest, jSerialComm),
+    Test / parallelExecution := false,
+    publish / skip := true
+  )
+
 lazy val root = (project in file("."))
-  .aggregate(vertebra, asyncfifo, i2c, aht10, sandbox)
+  .aggregate(vertebra, asyncfifo, i2c, aht10, sandbox, hilFpga, hil)
   .settings(publish / skip := true)
