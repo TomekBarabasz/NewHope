@@ -70,7 +70,7 @@ Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **ind
 | `0x005` | `status` | R | bit 0 bieg, bit 1 lock, bit 2 był błąd |
 | `0x006` | `variant` | R | wariant bitstreamu, kodowanie per IP (`<ip>/commands.md`); host sprawdza go razem z `build` |
 | `0x007` | `scratch` | RW | dowolna wartość, bez wpływu na harness; test łącza (`hw_link`) |
-| `0x010` | `sent` | R | liczniki checkera i generatora; migawka przy `stop`, czytać po `stop` |
+| `0x010` | `sent` | R | ramki oddane przez generator (handshake z DUT-em); ten i następne: migawka przy `stop`, czytać po `stop` |
 | `0x011` | `frames` | R | |
 | `0x012` | `bad` | R | |
 | `0x013` | `gaps` | R | |
@@ -79,9 +79,9 @@ Transport: UART FPGA, 115200 8N1 (baud jest generykiem harnessu). Adres to **ind
 | `0x016` | `err_n` | R | pola `first_err`; ważne, gdy `bad > 0` |
 | `0x017`–`0x01A` | `err_got_l`, `err_got_r`, `err_exp_l`, `err_exp_r` | R | |
 | `0x020` | `seed` | RW | seed wzorca |
-| `0x021` | `gap_mode` | RW | 0 bez luk, 1 okresowo, 2 losowo z seeda |
-| `0x022` | `gap_every` | RW | co ile ramek luka |
-| `0x023` | `gap_len` | RW | długość luki w ramkach |
+| `0x021` | `gap_mode` | RW | 0 bez luk; 1 luka po każdych `gap_every` ramkach; 2 luka po ramce n, gdy `(xorshift32(n ^ seed ^ 0x9E3779B9) mod 2^16) & (gap_every - 1) == 0` (`gap_every` potęgą dwójki) |
+| `0x022` | `gap_every` | RW | 16 bitów; 0 = bez luk |
+| `0x023` | `gap_len` | RW | 16 bitów, liczba ramek ciszy w luce (liczona impulsami underrun DUT-a); 0 = bez luk |
 | `0x040` | `rst_count` | RW | liczba resetów DUT-a w biegu |
 | `0x041` | `rst_seed` | RW | seed LFSR opóźnień |
 | `0x042` | `rst_min` | RW | minimalne opóźnienie w cyklach `dut` |
