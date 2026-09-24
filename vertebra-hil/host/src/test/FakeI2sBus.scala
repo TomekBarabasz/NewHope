@@ -18,6 +18,11 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
   var fpgaRxFault : Option[(Long, I2sWords => I2sWords)] = None
   var espRxFault  : Option[(Long, I2sWords => I2sWords)] = None
 
+  /** Ponizej tego zegara dut DUT slave "nie nadaza": co druga ramka zla. */
+  var dutMinHz : Double = 0
+
+  private def slow : Boolean = !fpgaMaster && fpga.dutHz < dutMinHz
+
   private def now = System.nanoTime
   private var espOn  : Option[(Long, Option[Long])] = None       // (start, stop)
   private var fpgaOn : Option[(Long, Option[Long])] = None
@@ -76,6 +81,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
       }
     }
     if (espFlag("rx")) cnt("sent") = patternPart(overlap(espOn, fpgaOn))   // generator FPGA
+    if (slow && cnt("frames") > 0) { cnt("bad") = cnt("bad") + cnt("frames") / 2; cnt("frames") = cnt("frames") / 2 }
     cnt("rst_done") = resets
     if (resets > 0 && cnt("frames") > 0) cnt("bad") = cnt("bad") + resets
   }
@@ -102,6 +108,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
     val gaps = if (frames > 0) gap.fold(0L) { case (e, l) => val g = frames * l / (e + l); frames -= g; g }
                else 0L
     if (frames > 0) bad += resets
+    if (slow && frames > 0) { bad += frames / 2; frames = frames / 2 }
     s"sent=$sent frames=$frames bad=$bad gaps=$gaps relocks=0 lock_at=$lockAt first_err=$err overflow=0"
   }
 
