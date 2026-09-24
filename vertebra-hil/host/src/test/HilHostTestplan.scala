@@ -310,7 +310,8 @@ class HilHostTestplan extends TestplanSuite {
 
   testpoint("host_hw_on_fakes") {
     val clean = runOnFakes(_ => ())
-    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame")) {
+    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame",
+                  "hw_mst_rx_frame", "hw_mst_tx_frame")) {
       info(s"$n: ${result(clean, n)}")
       assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
     }
@@ -325,6 +326,8 @@ class HilHostTestplan extends TestplanSuite {
     info(s"hw_slv_tx_frame z bledem: $tx")
     assert(rx.startsWith("FAILED") && rx.contains("ramka 150: przeklamane bity") && rx.contains("R xor=00000001"), rx)
     assert(tx.startsWith("FAILED") && tx.contains("ramka 200: kanaly zamienione") && tx.contains("idx 200"), tx)
+    for (n <- Seq("hw_mst_rx_frame", "hw_mst_tx_frame"))
+      assert(result(faulty, n).startsWith("FAILED"), s"$n: ${result(faulty, n)}")
   }
 
 }

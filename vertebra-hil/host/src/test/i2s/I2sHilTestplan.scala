@@ -12,7 +12,7 @@ import scala.util.chaining._
 //  uzupelniaja.
 //
 //  Plan rosnie z etapami. Testpointy z §8 dochodza do planu w etapie,
-//  ktory je robi (5: hw_slv_*, hw_la_crosscheck; 6: reszta V1 i V2;
+//  ktory je robi (5: hw_slv_*, hw_la_crosscheck; 6: hw_mst_*, reszta V2;
 //  7: V3), a nie wczesniej: `testplan completeness` wymaga kompletnego
 //  V1, wiec wpisanie hw_mst_rx_frame juz teraz zrobiloby `sbt test`
 //  czerwonym bez stanowiska.
@@ -22,7 +22,7 @@ import scala.util.chaining._
 //    sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
 //    sbt "hil/testOnly *I2sHilTestplan -- -z param"                       bez sprzetu
 //    sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dframes=100000"
-//        krotszy bieg hw_slv_* (domyslnie 10^6 ramek, kryterium etapu 5)
+//        krotszy bieg hw_slv_* / hw_mst_* (domyslnie 10^6 ramek)
 //
 //  Scenariusze end-to-end: jedna konfiguracja, ta z I2sBenchCfg, ktora
 //  pasuje do wgranego wariantu (ESP32 z ta sama szerokoscia slowa).
@@ -72,6 +72,18 @@ object I2sHilPlan {
                      "0 <= sent FPGA - frames ESP32 <= bufory DMA ESP32 z zapasem",
                      "przy bledzie: dump ESP32 zdekodowany wzorcem (I2sDiag)")),
 
+    Testpoint("hw_mst_rx_frame", Stage.V1,
+      "ESP32 slave nadaje wzorzec, FPGA master (DUT) odbiera; uzupelnia i2s_rx_frame",
+      stimulus = Seq("FPGA role=master (SCK/WS z DCM), ESP32 role=slave tx=1 rx=0", "-Dframes ramek"),
+      checking = Seq("checker FPGA: lock, frames >= -Dframes, bad = gaps = relocks = overflow = 0",
+                     "ESP32 slave z obcym zegarem nadaje bez przesuniecia kanalow (esp-idf #9513, §11)")),
+
+    Testpoint("hw_mst_tx_frame", Stage.V1,
+      "FPGA master (DUT) nadaje wzorzec, ESP32 slave odbiera; uzupelnia i2s_tx_frame",
+      stimulus = Seq("FPGA role=master, ESP32 role=slave tx=0 rx=1", "-Dframes ramek"),
+      checking = Seq("checker ESP32: lock, frames >= -Dframes, bad = gaps = relocks = overflow = 0",
+                     "0 <= sent FPGA - frames ESP32 <= bufory DMA ESP32 z zapasem")),
+
     Testpoint("hw_la_crosscheck", Stage.V2,
       "Logic analyzer zgadza sie z obiema plytkami",
       stimulus = Seq("nagranie sigrok linii SCK/WS/SD w trakcie hw_slv_*"),
@@ -87,7 +99,7 @@ class I2sHilTestplan extends HilSuite {
 
   override def suiteOptions : Set[String] = Set("frames")
 
-  /** Ramki biegu hw_slv_* (kryterium etapu 5: 10^6). */
+  /** Ramki biegu hw_slv_* / hw_mst_* (kryterium etapow 5-6: 10^6). */
   def runFrames : Long = option("frames").map { v =>
     v.replace("_", "").toLongOption.filter(_ > 0).getOrElse(fail(s"-Dframes=$v: to nie liczba > 0"))
   }.getOrElse(1000000L)
@@ -229,7 +241,7 @@ class I2sHilTestplan extends HilSuite {
 
 
   // -------------------------------------------------------------------
-  //  hw_slv_*: ESP32 master, FPGA slave
+  //  hw_slv_*, hw_mst_*: jeden kierunek, jedna rola FPGA
   // -------------------------------------------------------------------
 
   /** Bufory DMA ESP32 w drodze (8 x 240 ramek, etap 3) z zapasem. */
@@ -243,15 +255,20 @@ class I2sHilTestplan extends HilSuite {
 
   val seedStr = f"0x$seed%08x"
 
-  /** Obie strony w stop (SCK/WS w Z), FPGA slave, ESP32 master. */
-  def setupSlave(b : HilBench, c : I2sBenchCfg, espTx : Boolean, espRx : Boolean) : Unit = {
+  /** Obie strony w stop (SCK/WS w Z, §9), potem cfg: FPGA w roli
+    * `fpgaMaster`, ESP32 w przeciwnej. Slot na magistrali daje master. */
+  def setup(b : HilBench, c : I2sBenchCfg, fpgaMaster : Boolean, espTx : Boolean, espRx : Boolean) : Unit = {
     val (esp, fpga) = (b.esp.get, b.fpga.get)
     esp.stop(); fpga.stop()
-    fpga.cfg("role" -> "slave", "peer_w" -> c.espW, "slot" -> c.espSlot, "seed" -> seedStr,
-             "gap_mode" -> 0, "gap_every" -> 0, "gap_len" -> 0, "rst_count" -> 0)
-    esp.cfg("role" -> "master", "fs" -> c.espFs, "w" -> c.espW, "slot" -> c.espSlot, "seed" -> seedStr,
-            "peer_w" -> c.v.width, "tx" -> (if (espTx) 1 else 0), "rx" -> (if (espRx) 1 else 0), "loop" -> 0)
-    info(s"${c.name}: ${c.v.name}, ESP32 master fs=${c.espFs} w=${c.espW} slot=${c.espSlot}, " +
+    val slot = if (fpgaMaster) c.v.slotWidth else c.espSlot
+    fpga.cfg("role" -> (if (fpgaMaster) "master" else "slave"), "peer_w" -> c.espW, "slot" -> slot,
+             "seed" -> seedStr, "gap_mode" -> 0, "gap_every" -> 0, "gap_len" -> 0, "rst_count" -> 0)
+    // ESP32 slave: fs to tylko nominal do DMA i zegara modulu (§7), ESP32 idzie za SCK FPGA.
+    esp.cfg("role" -> (if (fpgaMaster) "slave" else "master"), "fs" -> c.espFs, "w" -> c.espW, "slot" -> slot,
+            "seed" -> seedStr, "peer_w" -> c.v.width, "tx" -> (if (espTx) 1 else 0), "rx" -> (if (espRx) 1 else 0),
+            "loop" -> 0)
+    val roles = if (fpgaMaster) "FPGA master, ESP32 slave" else "ESP32 master, FPGA slave"
+    info(s"${c.name}: ${c.v.name}, $roles, fs=${c.espFs} w=${c.espW} slot=$slot, " +
          s"$runFrames ramek (~${runFrames / c.espFs} s)")
   }
 
@@ -285,41 +302,43 @@ class I2sHilTestplan extends HilSuite {
   def safely(b : HilBench)(body : => Unit) : Unit =
     try body finally { scala.util.Try(b.esp.get.stop()); scala.util.Try(b.fpga.get.stop()) }
 
-  hwScenario("hw_slv_rx_frame") { b =>
-    val c = benchCfg(b)
+  /** Jeden kierunek: `dutRx` = DUT odbiera (nadaje ESP32), inaczej DUT
+    * nadaje, a sprawdza ESP32. Kolejnosc: start odbiornika przed nadawca
+    * (takze gdy odbiornik daje zegar), stop odbiornika przed nadawca -
+    * migawka z ciaglego strumienia, a nie z ciszy przy wylaczaniu. */
+  def oneWay(b : HilBench, c : I2sBenchCfg, fpgaMaster : Boolean, dutRx : Boolean) : Unit = {
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
     safely(b) {
-      setupSlave(b, c, espTx = true, espRx = false)
-      b.fpga.get.start()                                     // odbiornik przed zegarem
-      b.esp.get.start()
-      waitEsp(b, c, runFrames + espInFlight, "ESP32 nadal")(_.sent)
-      b.fpga.get.stop()                                      // odbiornik przed nadawca
-      val es = b.esp.get.stat()
-      b.esp.get.stop()
-      info(s"ESP32 (nadawca): $es")
-      val fs = b.fpga.get.stat()
-      expectClean("FPGA", b.fpga.get, fs, c.linkToFpga(seed, fpgaMaster = false))
-      assert(fs.frames <= es.sent, s"FPGA policzyl ${fs.frames} ramek, ESP32 nadal ${es.sent}")
+      setup(b, c, fpgaMaster, espTx = dutRx, espRx = !dutRx)
+      if (dutRx) {
+        fpga.start(); esp.start()
+        waitEsp(b, c, runFrames + espInFlight, "ESP32 nadal")(_.sent)
+        fpga.stop()
+        val es = esp.stat()
+        esp.stop()
+        info(s"ESP32 (nadawca): $es")
+        val fs = fpga.stat()
+        expectClean("FPGA", fpga, fs, c.linkToFpga(seed, fpgaMaster))
+        assert(fs.frames <= es.sent, s"FPGA policzyl ${fs.frames} ramek, ESP32 nadal ${es.sent}")
+      } else {
+        esp.start(); fpga.start()
+        waitEsp(b, c, runFrames, "ESP32 odebral")(_.frames)
+        esp.stop(); fpga.stop()
+        val es = esp.stat()
+        val fs = fpga.stat()
+        info(s"FPGA (nadawca): sent=${fs.sent}")
+        expectClean("ESP32", esp, es, c.linkToEsp(seed, fpgaMaster))
+        val lag = fs.sent - es.frames
+        info(s"sent FPGA - frames ESP32 = $lag (ramki w DMA ESP32 w chwili stop)")
+        assert(lag >= 0 && lag <= espInFlight, s"sent FPGA ${fs.sent}, frames ESP32 ${es.frames}")
+      }
     }
   }
 
-  hwScenario("hw_slv_tx_frame") { b =>
-    val c = benchCfg(b)
-    safely(b) {
-      setupSlave(b, c, espTx = false, espRx = true)
-      b.esp.get.start()                                      // zegar i odbiornik; FPGA jeszcze milczy
-      b.fpga.get.start()
-      waitEsp(b, c, runFrames, "ESP32 odebral")(_.frames)
-      b.esp.get.stop()                                       // odbiornik (i zegar) przed nadawca
-      b.fpga.get.stop()
-      val es = b.esp.get.stat()
-      val fs = b.fpga.get.stat()
-      info(s"FPGA (nadawca): sent=${fs.sent}")
-      expectClean("ESP32", b.esp.get, es, c.linkToEsp(seed, fpgaMaster = false))
-      val lag = fs.sent - es.frames
-      info(s"sent FPGA - frames ESP32 = $lag (ramki w DMA ESP32 w chwili stop)")
-      assert(lag >= 0 && lag <= espInFlight, s"sent FPGA ${fs.sent}, frames ESP32 ${es.frames}")
-    }
-  }
+  hwScenario("hw_slv_rx_frame") { b => oneWay(b, benchCfg(b), fpgaMaster = false, dutRx = true) }
+  hwScenario("hw_slv_tx_frame") { b => oneWay(b, benchCfg(b), fpgaMaster = false, dutRx = false) }
+  hwScenario("hw_mst_rx_frame") { b => oneWay(b, benchCfg(b), fpgaMaster = true,  dutRx = true) }
+  hwScenario("hw_mst_tx_frame") { b => oneWay(b, benchCfg(b), fpgaMaster = true,  dutRx = false) }
 
   unimplemented("hw_la_crosscheck",
     "brak analizatora stanow (vertebra-hil.md §11); SigrokI2sCheck jest gotowy (etap 3)")

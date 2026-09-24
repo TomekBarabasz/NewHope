@@ -32,6 +32,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
       case _ => 0L
     }
   private def espFlag(k : String) = espCfg.get(k).contains("1")
+  private def fpgaMaster : Boolean = fpga.rw(0x100) == 1L
 
   // --- FPGA: liczniki przy stop -------------------------------------------
   fpga.onCtrl = {
@@ -44,7 +45,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
     val cnt = fpga.counters
     cnt.clear(); cnt("lock_at") = 0xFFFFFFFFL
     fpga.capture = Nil
-    val link = c.linkToFpga(seed, fpgaMaster = false)
+    val link = c.linkToFpga(seed, fpgaMaster)
     if (espFlag("tx")) {                                    // ESP32 nadaje -> checker FPGA
       val n = overlap(espOn, fpgaOn)
       if (n > 3) {
@@ -67,8 +68,10 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
 
   // --- ESP32 ---------------------------------------------------------------
   private def espStat : String = {
-    val sent = if (espFlag("tx")) overlap(espOn, espOn) else 0L
-    val link = c.linkToEsp(seed, fpgaMaster = false)
+    // Nadawanie ESP32 idzie za zegarem: wlasnym (master) albo FPGA (slave).
+    val clock = if (fpgaMaster) fpgaOn else espOn
+    val sent = if (espFlag("tx")) overlap(espOn, clock) else 0L
+    val link = c.linkToEsp(seed, fpgaMaster)
     var frames = 0L; var bad = 0L; var err = "-"; var lockAt = "-1"
     if (espFlag("rx")) {
       val n = scala.math.max(0L, overlap(espOn, fpgaOn) - 480)  // ramki jeszcze w DMA
@@ -86,7 +89,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
 
   private def espDump : Seq[String] = espRxFault match {
     case Some((k, f)) if espOn.isDefined =>
-      val link = c.linkToEsp(seed, fpgaMaster = false)
+      val link = c.linkToEsp(seed, fpgaMaster)
       val rows = (k - 16 until k + 16).filter(_ >= 0).map { i =>
         val e = link.expected(i); val g = if (i == k) f(e) else e
         f"$i ${g.l}%08x ${g.r}%08x ${e.l}%08x ${e.r}%08x"
