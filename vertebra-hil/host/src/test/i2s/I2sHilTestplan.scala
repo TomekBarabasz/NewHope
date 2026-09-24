@@ -391,8 +391,11 @@ class I2sHilTestplan extends HilSuite {
   def variantOf(b : HilBench) : I2sHilVariant = benchCfg(b).v
 
   /** Full duplex: obie strony nadaja i sprawdzaja. Start: slave przed
-    * masterem (§3); stop: master pierwszy - zegar staje dla obu kierunkow
-    * naraz, wiec zaden checker nie widzi ciszy. */
+    * masterem (§3). Stop kazdej strony robi cisze dla checkera drugiej:
+    * ESP32 przestaje nadawac, a FPGA master po stop dalej daje SCK/WS
+    * (clkOe = rola, nie bieg), tylko z generatorem wylaczonym. Dlatego
+    * liczniki ESP32 czytamy jeszcze w biegu (stat dziala w kazdym stanie),
+    * potem stop FPGA (migawka z ciaglego strumienia), na koncu ESP32. */
   def duplex(b : HilBench, c : I2sBenchCfg, fpgaMaster : Boolean, n : Long) : Unit = {
     val (esp, fpga) = (b.esp.get, b.fpga.get)
     val (master, slave) = if (fpgaMaster) (fpga : HilDevice, esp : HilDevice) else (esp : HilDevice, fpga : HilDevice)
@@ -400,8 +403,9 @@ class I2sHilTestplan extends HilSuite {
       setup(b, c, fpgaMaster, espTx = true, espRx = true, n)
       slave.start(); master.start()
       waitEsp(b, c, n + espInFlight, "ESP32 odebral")(_.frames)
-      master.stop(); slave.stop()
-      val (es, fs) = (esp.stat(), fpga.stat())
+      val es = esp.stat()
+      fpga.stop(); esp.stop()
+      val fs = fpga.stat()
       expectClean("ESP32", esp, es, c.linkToEsp(seed, fpgaMaster), n)
       expectClean("FPGA", fpga, fs, c.linkToFpga(seed, fpgaMaster), n)
     }

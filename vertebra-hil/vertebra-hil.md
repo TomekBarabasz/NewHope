@@ -454,7 +454,7 @@ Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
 - V1 (`-Dframes`, domyślnie 10^6): `hw_slv_rx_frame`, `hw_slv_tx_frame`, `hw_mst_rx_frame`, `hw_mst_tx_frame`. Wszystkie cztery liczy jedna funkcja (rola FPGA × kierunek): start odbiornika przed nadawcą, stop odbiornika przed nadawcą.
 - V2 (`-Dframes_v2`, domyślnie 200 000, ok. 4 s na bieg):
-  - `hw_full_duplex` w obu rolach: start slave'a przed masterem, stop najpierw mastera, żeby zegar stanął dla obu kierunków naraz;
+  - `hw_full_duplex` w obu rolach: start slave'a przed masterem; liczniki ESP32 czytane jeszcze w biegu, potem stop FPGA (migawka), na końcu ESP32. Stop każdej strony robi ciszę dla checkera drugiej, a FPGA master po `stop` dalej daje SCK/WS (`clkOe` zależy od roli, nie od biegu) z wyłączonym generatorem: pierwsza wersja (stop mastera najpierw) dała na `v32_32` 260 ramek ciszy po stronie ESP32;
   - `hw_padding` (ESP32 master, słowo DUT-a w slocie 32; `v32_32`: *canceled*);
   - `hw_lsb_across_ws` (slot = słowo);
   - `hw_word_length_mismatch` (ESP32 24 przy DUT 16, 16 przy DUT 24/32, 8 przy slocie 16; obie role, oba kierunki);
