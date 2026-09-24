@@ -7,6 +7,7 @@ simWorkspace/
 */simWorkspace/
 .spinal-sbt/
 vertebra-hil/fpga/build
+vertebra-hil/fpga/hw/gen/*.v
 vertebra-hil/esp32/build
 vertebra-hil/esp32/sdkconfig
 vertebra-hil/esp32/*/build
