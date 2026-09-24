@@ -1,6 +1,7 @@
 import argparse
 import serial
 import sys
+import time
 import xmodem
 
 parser = argparse.ArgumentParser(description='Mimas V2 Programmer')
@@ -65,8 +66,28 @@ port.write(b'f\r')
 port.read(3)
 
 with open(args.filename, 'rb') as stream:
-  if modem.send(stream):
-    print()
-    print('Done.')
-  else:
-    print('Failed.')
+  ok = modem.send(stream)
+print()
+
+# Po XMODEM PIC jeszcze weryfikuje flash i wypisuje wynik na ten port.
+# Jesli nikt go nie odczyta, PIC wisi na zapisie do USB, a razem z nim
+# most UART do FPGA: port UART nie przyjmuje bajtow, dopoki ktos nie
+# otworzy i nie odczyta portu programatora (vertebra-hil.md §9). Dlatego
+# czytamy wszystko az do znaku zachety.
+port.timeout = 0.5
+tail = b''
+deadline = time.time() + 60
+while b'mimas>' not in tail and time.time() < deadline:
+  tail += port.read(256)
+text = tail.decode(errors='replace').strip()
+if text:
+  print(text)
+if b'mimas>' not in tail:
+  print('Uwaga: brak znaku zachety po 60 s; odczytaj port programatora recznie, zanim uzyjesz UART-a FPGA.')
+port.close()
+
+if ok:
+  print('Done.')
+else:
+  print('Failed.')
+  sys.exit(1)

@@ -421,6 +421,7 @@ Zasady:
 - **Zmiana roli bez konfliktu.** Przy przełączaniu master/slave orkiestrator najpierw ustawia obie strony w `stop` z SCK/WS w wysokiej impedancji, dopiero potem konfiguruje nową rolę. Rezystory 100 Ω na SCK i WS ograniczają prąd, gdyby doszło do krótkiego konfliktu, i tłumią odbicia.
 - **Kable krótkie**, do ok. 15 cm, taśma z masą między liniami sygnałowymi. Podwójne zbocze na SCK od dzwonienia to błąd stanowiska, nie IP; `hw_la_crosscheck` ma to wykluczyć.
 - **Zasilanie** obu płytek z jednego zasilanego huba USB, żeby nie mieć pętli masy przez dwa porty PC.
+- **Po wgraniu bitstreamu port programatora trzeba odczytać.** PIC (firmware jimmo) po XMODEM weryfikuje flash i wypisuje wynik na port programatora. Dopóki nikt go nie odczyta, PIC wisi na zapisie do USB, a port UART FPGA nie przyjmuje bajtów (host: „zapis ... nie powiódł się w 2000 ms”). `tools/programmer.py` czyta ten port aż do znaku zachęty `mimas>`; po ręcznym programowaniu wystarczy otworzyć port programatora i odczytać, co czeka, albo odłączyć USB. Uwaga: port programatora wykonuje komendy po CR (np. `e` kasuje flash), więc nie wysyłamy na niego ramek mostu. Na stanowisku: COM13 programator, COM12 UART FPGA.
 
 ### Gdzie co działa
 
