@@ -6,7 +6,7 @@ Zmiana tego pliku podnosi wersję protokołu dla wszystkich IP. PC rozmawia z ES
 
 ## ESP32: protokół tekstowy
 
-Transport: USB-CDC. Komenda to jedna linia ASCII zakończona `\n` (`\r` przed nim jest ignorowane), najwyżej 255 znaków. Słowa oddziela spacja, argumenty mają postać `klucz=wartość`. Każda komenda dostaje dokładnie jedną linię odpowiedzi, poza `dump`:
+Transport: USB-CDC. Komenda to jedna linia ASCII zakończona `\n` albo `\r`, najwyżej 255 znaków. `\r\n` daje komendę i pustą linię, a pusta linia nie dostaje odpowiedzi; sam `\r` wysyła na Enter terminal typu PuTTY. Słowa oddziela spacja, argumenty mają postać `klucz=wartość`. Każda komenda dostaje dokładnie jedną linię odpowiedzi, poza `dump`:
 
 ```
 ok[ klucz=wartość ...]
