@@ -34,6 +34,8 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
   port.onWrite = b => b.foreach(x => feed(x & 0xFF))
 
   var running  = false
+  /** Po kazdym impulsie ctrl (model magistrali: FakeI2sBus). */
+  var onCtrl : Int => Unit = _ => ()
   var snapshot = false
   val ctrlPulses = mutable.ArrayBuffer[Int]()             // bity ctrl, ktore zadzialaly
   val writes     = mutable.ArrayBuffer[(Int, Long)]()     // udane zapisy RW
@@ -102,6 +104,7 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
                 case CtrlBit.Stop  => snapshot = true; running = false     // migawka zawsze (HilCounters)
                 case _             => running = false
               }
+              onCtrl(bit)
             }
             (Status.Ok, d)
           } else if (rw.contains(addr)) {

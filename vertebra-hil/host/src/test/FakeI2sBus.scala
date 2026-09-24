@@ -1,0 +1,112 @@
+package newhope.vertebra.hil
+
+import scala.collection.mutable
+import newhope.vertebra.hil.i2s.{I2sBenchCfg, I2sPattern, I2sWords}
+import HilProtocol._
+
+// =====================================================================
+//  Magistrala I2S miedzy atrapami (FakeFpga + ESP32 ze stanem), zeby
+//  scenariusze hw_slv_* dalo sie przejsc bez stanowiska: ramki plyna
+//  z czestotliwoscia fs, gdy ESP32 (master) daje zegar, a druga strona
+//  pracuje. Bledy wstrzykiwane w jedna ramke odbiornika.
+// =====================================================================
+class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val fpgaBuild : Long,
+                 val vectors : Int) {
+  val fpga = new FakeFpga(c.v.code, fpgaBuild)
+
+  /** Przeklamanie ramki `n` po stronie odbiornika: got = f(exp). */
+  var fpgaRxFault : Option[(Long, I2sWords => I2sWords)] = None
+  var espRxFault  : Option[(Long, I2sWords => I2sWords)] = None
+
+  private def now = System.nanoTime
+  private var espOn  : Option[(Long, Option[Long])] = None       // (start, stop)
+  private var fpgaOn : Option[(Long, Option[Long])] = None
+  private val espCfg = mutable.Map[String, String]("tx" -> "1", "rx" -> "1", "loop" -> "0")
+
+  private def span(x : Option[(Long, Option[Long])]) = x.map { case (a, b) => (a, b.getOrElse(now)) }
+  private def overlap(a : Option[(Long, Option[Long])], b : Option[(Long, Option[Long])]) : Long =
+    (span(a), span(b)) match {
+      case (Some((a0, a1)), Some((b0, b1))) =>
+        val t = scala.math.min(a1, b1) - scala.math.max(a0, b0)
+        if (t <= 0) 0L else (t / 1e9 * c.espFs).toLong
+      case _ => 0L
+    }
+  private def espFlag(k : String) = espCfg.get(k).contains("1")
+
+  // --- FPGA: liczniki przy stop -------------------------------------------
+  fpga.onCtrl = {
+    case CtrlBit.Start => fpgaOn = Some((now, None))
+    case CtrlBit.Stop  => fpgaOn = fpgaOn.map { case (a, _) => (a, Some(now)) }; snapshotFpga()
+    case _             =>
+  }
+
+  private def snapshotFpga() : Unit = {
+    val cnt = fpga.counters
+    cnt.clear(); cnt("lock_at") = 0xFFFFFFFFL
+    fpga.capture = Nil
+    val link = c.linkToFpga(seed, fpgaMaster = false)
+    if (espFlag("tx")) {                                    // ESP32 nadaje -> checker FPGA
+      val n = overlap(espOn, fpgaOn)
+      if (n > 3) {
+        cnt("lock_at") = 0; cnt("frames") = n
+        fpgaRxFault.filter(_._1 < n).foreach { case (k, f) =>
+          val exp = link.expected(k); val got = f(exp)
+          cnt("frames") = n - 1; cnt("bad") = 1
+          Seq("err_n" -> k, "err_got_l" -> got.l, "err_got_r" -> got.r, "err_exp_l" -> exp.l, "err_exp_r" -> exp.r)
+            .foreach { case (a, b) => cnt(a) = b }
+          fpga.capture = (k - 16 until k + 16).filter(_ >= 0).map { i =>
+            val e = link.expected(i); val g = if (i == k) got else e
+            Seq(i, g.l, g.r, e.l, e.r)
+          }
+          cnt("cap_count") = fpga.capture.size.toLong
+        }
+      }
+    }
+    if (espFlag("rx")) cnt("sent") = overlap(espOn, fpgaOn)  // generator FPGA za zegarem ESP32
+  }
+
+  // --- ESP32 ---------------------------------------------------------------
+  private def espStat : String = {
+    val sent = if (espFlag("tx")) overlap(espOn, espOn) else 0L
+    val link = c.linkToEsp(seed, fpgaMaster = false)
+    var frames = 0L; var bad = 0L; var err = "-"; var lockAt = "-1"
+    if (espFlag("rx")) {
+      val n = scala.math.max(0L, overlap(espOn, fpgaOn) - 480)  // ramki jeszcze w DMA
+      if (n > 3) {
+        frames = n; lockAt = "0"
+        espRxFault.filter(_._1 < n).foreach { case (k, f) =>
+          val exp = link.expected(k); val got = f(exp)
+          frames = n - 1; bad = 1
+          err = f"$k:${got.l}%08x:${got.r}%08x:${exp.l}%08x:${exp.r}%08x"
+        }
+      }
+    }
+    s"sent=$sent frames=$frames bad=$bad gaps=0 relocks=0 lock_at=$lockAt first_err=$err overflow=0"
+  }
+
+  private def espDump : Seq[String] = espRxFault match {
+    case Some((k, f)) if espOn.isDefined =>
+      val link = c.linkToEsp(seed, fpgaMaster = false)
+      val rows = (k - 16 until k + 16).filter(_ >= 0).map { i =>
+        val e = link.expected(i); val g = if (i == k) f(e) else e
+        f"$i ${g.l}%08x ${g.r}%08x ${e.l}%08x ${e.r}%08x"
+      }
+      s"ok n=${rows.size}" +: rows :+ "ok end"
+    case _ => Seq("ok n=0", "ok end")
+  }
+
+  val esp = new FakeEsp({
+    case "ver"      => Seq(s"ok proto=1 dev=esp32s3 ip=i2s build=$build")
+    case "selftest" => Seq(s"ok vectors=$vectors")
+    case "start"    => espOn = Some((now, None)); Seq("ok")
+    case "stop"     => espOn = espOn.map { case (a, b) => (a, Some(b.getOrElse(now))) }; Seq("ok")
+    case "stat"     => Seq(s"ok $espStat")
+    case "dump"     => espDump
+    case l if l.startsWith("cfg ") =>
+      val kv = l.split(' ').drop(1).map(_.split('=')).map(a => a(0) -> a(1))
+      if (kv.forall(k => Set("role", "fs", "w", "slot", "seed", "peer_w", "tx", "rx", "loop")(k._1))) {
+        espCfg ++= kv; Seq("ok")
+      } else Seq("err 2 nieznany klucz")
+    case x => Seq(s"err 1 nieznana komenda '$x'")
+  })
+}

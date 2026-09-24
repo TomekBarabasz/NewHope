@@ -114,8 +114,8 @@ NewHope/
       hw/build/      (gitignore)    .bit / .bin
     host/                           sbt: hil (srcLayout)
       src/main/                     EchoProbe (etap 0); HilLink, HilDevice, EspDevice, FpgaDevice, HilBench, HilSuite (etap 4)
-      src/main/i2s/                 SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4)
-      src/test/                     HilHostTestplan, HilFakes: host na atrapach płytek (etap 4)
+      src/main/i2s/                 SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4); I2sDiag (etap 5)
+      src/test/                     HilHostTestplan, HilFakes, FakeI2sBus: host na atrapach płytek (etapy 4-5)
       src/test/i2s/                 I2sHilTestplan (etap 4)
     esp32/                          ESP-IDF (CMake), poza sbt
       CMakeLists.txt, sdkconfig.defaults
@@ -392,6 +392,7 @@ Uruchamianie:
 sbt "hil/testOnly *I2sHilTestplan"                   # cały plan
 sbt "hil/testOnly *I2sHilTestplan -- -z hw_slv"      # tylko rola slave
 sbt "hil/testOnly *I2sHilTestplan -- -z param"       # bez sprzętu
+sbt "hil/testOnly *I2sHilTestplan -- -z hw_slv -Desp_com=COM11 -Dfpga_com=COM12 -Dframes=100000"   # krótszy bieg
 ```
 
 Suity `hil` nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecution := false` w tym podprojekcie.
@@ -447,6 +448,14 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 | 7 | I2S V3 | reset DUT-a w losowym momencie, `hw_clock_ratio_sweep` (dynamiczne M/D DCM\_CLKGEN), `hw_soak` | 10 min soak na każdą rolę bez błędu; znaleziona granica zegara slave'a zgodna z `supportsSckHalf` |
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
+
+**Stan etapu 5 (2026-09-24).** `hw_slv_rx_frame` (ESP32 master nadaje, FPGA slave sprawdza) i `hw_slv_tx_frame` (FPGA slave nadaje, ESP32 master sprawdza, simplex) w `I2sHilTestplan`, na jednej konfiguracji: tej z `I2sBenchCfg`, która pasuje do wgranego wariantu (dla `v16_32`: 48 kHz, 16 w 32). Kolejność z §3: obie strony w `stop`, `cfg`, start odbiornika przed zegarem, a na końcu stop odbiornika przed nadawcą, żeby migawka była z ciągłego strumienia, a nie z ciszy przy wyłączaniu. Postęp liczy `stat` ESP32 w trakcie biegu (liczniki FPGA są tylko w migawce). Liczba ramek: `-Dframes` (domyślnie 10^6, ok. 21 s na test). Przy błędzie test robi `dump` z odbiornika i dekoduje go wzorcem (`I2sDiag`): „ramka 150: przekłamane bity: R xor=00000001”, „kanały zamienione”, „zgubione k ramek”, „zdublowana ramka”, „przesunięcie o bit”. `HilHostTestplan` przechodzi oba scenariusze na atrapach (`FakeI2sBus`) z czystym biegiem i z wstrzykniętymi błędami. `hw_la_crosscheck` jest w planie jako V2 `unimplemented`: brak analizatora (§11). Kryterium etapu wymaga płytek zbudowanych z czystego drzewa (etap 4) i:
+
+```
+sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+#   hw_slv_rx_frame: FPGA frames >= 10^6, bad = gaps = relocks = overflow = 0
+#   hw_slv_tx_frame: ESP32 frames >= 10^6, to samo; sent FPGA - frames ESP32 w [0, 4096]
+```
 
 **Wyniki etapu 4 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`: 4/4 (completeness, `hw_param_bounds`, `hw_link` esp32 i fpga), kryterium etapu spełnione. Obie płytki miały buildy `-dirty` sprzed commitów, które je opisują (ESP32 `2e88ec01-dirty`, bitstream `77ae7eb6-dirty`), stąd `allow_stale`. Przed etapem 5 obie trzeba zbudować z czystego drzewa, żeby `HilBench` przechodził bez tej opcji. Opcje `-D` suity muszą być w cudzysłowie razem z `testOnly ... --`: poza nim trafiają do JVM sbt, a nie do suity. Nieznana opcja suity (np. `-Dallow-stale`) jest błędem.
 

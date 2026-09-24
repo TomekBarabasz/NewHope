@@ -31,6 +31,14 @@ trait HilSuite extends TestplanSuite {
     super.run(testName, args)
   }
 
+  /** Opcje -D wlasne suity (np. liczba ramek), poza opcjami stanowiska. */
+  def suiteOptions : Set[String] = Set.empty
+
+  def option(name : String) : Option[String] = {
+    require(suiteOptions(name) || HilBenchOpts.known(name), s"opcja $name nie jest zadeklarowana")
+    configMap.get(name).map(_.toString.trim).filter(_.nonEmpty)
+  }
+
   /** Otwierane przy pierwszym uzyciu, jedno na JVM (HilBench.get). */
   def bench : Either[String, Option[HilBench]] = HilBench.get(hilIp, HilBenchOpts.from(configMap))
 
@@ -41,10 +49,10 @@ trait HilSuite extends TestplanSuite {
   def hwScenario(name : String, variant : String = "", needs : Set[HilSide.Value] = HilSide.Both)
                 (body : HilBench => Unit) : Unit =
     testpoint(name, variant) {
-      val bad = HilBenchOpts.unknown(configMap)
+      val bad = HilBenchOpts.unknown(configMap, suiteOptions)
       if (bad.nonEmpty)
         fail(s"nieznane opcje suity: ${bad.map("-D" + _).mkString(", ")} " +
-             s"(znane: ${HilBenchOpts.known.toSeq.sorted.map("-D" + _).mkString(", ")})")
+             s"(znane: ${(HilBenchOpts.known ++ suiteOptions).toSeq.sorted.map("-D" + _).mkString(", ")})")
       val b = bench match {
         case Left(e) => fail(s"stanowisko: $e")
         case Right(x) => x

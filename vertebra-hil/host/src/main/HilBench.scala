@@ -57,7 +57,8 @@ object HilBenchOpts {
 
   /** Opcje suity spoza `known`. Literowka (np. allow-stale) ma przerwac
     * test, a nie zostac po cichu zignorowana - jak nieznany klucz w cfg. */
-  def unknown(config : Map[String, Any]) : Seq[String] = (config.keySet -- known).toSeq.sorted
+  def unknown(config : Map[String, Any], extra : Set[String] = Set.empty) : Seq[String] =
+    (config.keySet -- known -- extra).toSeq.sorted
 
   def from(config : Map[String, Any], env : Map[String, String] = sys.env) : HilBenchOpts = {
     def port(opt : String, envVar : String) =

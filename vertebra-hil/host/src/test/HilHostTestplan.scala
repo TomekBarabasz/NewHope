@@ -1,8 +1,8 @@
 package newhope.vertebra.hil
 
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
-import newhope.vertebra.hil.i2s.{I2sHil, I2sHilTestplan, I2sHilVariant}
-import org.scalatest.{Args, Reporter}
+import newhope.vertebra.hil.i2s.{I2sBenchCfg, I2sHil, I2sHilPlan, I2sHilTestplan, I2sHilVariant, I2sWords}
+import org.scalatest.{Args, ConfigMap, Reporter}
 import org.scalatest.events.{Event, TestCanceled, TestFailed, TestSucceeded}
 import HilProtocol._
 
@@ -46,11 +46,17 @@ object HilHostPlan {
                      "ten sam port dwa razy -> Left",
                      "zly proto, zle IP, nieaktualny build -> blad tej plytki, druga dziala; allow_stale -> ostrzezenie",
                      "HilGit: commit nieznany, zmienione zrodla, brak hasha; dirty: tylko zmiany zacommitowane od builda")),
-    Testpoint("host_hw_link_on_fakes", Stage.V1,
-      "Cialo hw_link (I2sHilTestplan) na atrapach obu plytek",
-      stimulus = Seq("I2sHilTestplan z HilBench zlozonym z FakeEsp i FakeFpga"),
-      checking = Seq("hw_link (esp32) i hw_link (fpga) przechodza: test sprzetowy sam jest sprawdzony, " +
-                     "zanim pierwszy raz zobaczy plytke")))
+    Testpoint("host_i2s_diag", Stage.V1,
+      "I2sDiag: przyczyna niezgodnej ramki z got i exp",
+      checking = Seq("zgodna, cisza, zamiana kanalow, zgubione k ramek, zdublowana ramka",
+                     "przesuniecie o bit w obie strony (z nieznanym bitem sasiedniego slowa)",
+                     "przeklamane bity z maska xor")),
+    Testpoint("host_hw_on_fakes", Stage.V1,
+      "Testy sprzetowe (I2sHilTestplan) na atrapach obu plytek",
+      stimulus = Seq("I2sHilTestplan z HilBench na FakeI2sBus (ramki plyna z fs, gdy pracuja obie strony)",
+                     "drugi bieg: przeklamana ramka po stronie FPGA, zamienione kanaly po stronie ESP32"),
+      checking = Seq("czysty bieg: hw_link, hw_slv_rx_frame, hw_slv_tx_frame przechodza",
+                     "bieg z bledami: hw_slv_* failed, komunikat nazywa przyczyne i numer ramki (I2sDiag)")))
 }
 
 class HilHostTestplan extends TestplanSuite {
@@ -262,28 +268,63 @@ class HilHostTestplan extends TestplanSuite {
     }
   }
 
-  testpoint("host_hw_link_on_fakes") {
-    val h = head.getOrElse("00000000")
-    val e = new FakeEsp(FakeEsp.healthy(h, vectors = I2sHil.selftestVectors))
-    val f = new FakeFpga(v.code, java.lang.Long.parseLong(h, 16) & ~1L)
+  testpoint("host_i2s_diag") {
+    import newhope.vertebra.hil.i2s.{I2sDiag, I2sPattern}
+    val link = I2sPattern.Link(I2sHilPlan.seed, 16, 32, 16)
+    val e = link.expected(100)
+    def x(got : I2sWords) = I2sDiag.explain(link, got, e)
+    assert(x(e) == "zgodna")
+    assert(x(I2sWords(0, 0)).startsWith("cisza"))
+    assert(x(e.swap).startsWith("kanaly zamienione"))
+    assert(x(link.expected(103)) == "poprawna ramka wzorca 3 dalej: zgubione 3 ramek")
+    assert(x(link.expected(99)).startsWith("zdublowana"))
+    // opoznienie: MSB z poprzedniego slowa (tu 1), reszta przesunieta w prawo
+    assert(x(I2sWords((e.l >>> 1) | 0x8000L, e.r >>> 1)).contains("za pozno"), x(I2sWords(e.l >>> 1, e.r >>> 1)))
+    assert(x(I2sWords(((e.l << 1) & 0xFFFFL) | 1L, (e.r << 1) & 0xFFFFL)).contains("za wczesnie"))
+    assert(x(I2sWords(e.l ^ 0x0101L, e.r)).contains("L xor=00000101 (2)"))
+  }
+
+  /** I2sHilTestplan na FakeI2sBus; zwraca wynik kazdego testu po nazwie. */
+  def runOnFakes(setup : FakeI2sBus => Unit) : Map[String, String] = {
+    val h   = head.getOrElse("00000000")
+    val bus = new FakeI2sBus(I2sBenchCfg.all.head, I2sHilPlan.seed, h, java.lang.Long.parseLong(h, 16) & ~1L,
+                             I2sHil.selftestVectors)
+    setup(bus)
     // allow_stale: lokalne zmiany w zrodlach plytek nie sa tu tematem
     val b = HilBench.open(I2sHil, HilBenchOpts(Some("E" -> "t"), Some("F" -> "t"), allowStale = true),
-                          opener(Map("E" -> e.port, "F" -> f.port)))
+                          opener(Map("E" -> bus.esp.port, "F" -> bus.fpga.port)))
     val suite = new I2sHilTestplan { override def bench = b }
     val events = scala.collection.mutable.ArrayBuffer[Event]()
     val rep = new Reporter { def apply(ev : Event) : Unit = synchronized { events += ev } }
-    suite.run(None, Args(rep))
-    def result(name : String) = events.collect {
-      case x : TestSucceeded if x.testName.contains(name) => "ok"
-      case x : TestFailed    if x.testName.contains(name) => s"FAILED: ${x.message}"
-      case x : TestCanceled  if x.testName.contains(name) => s"canceled: ${x.message}"
-    }
-    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds")) {
-      val r = result(n)
-      info(s"$n: ${r.mkString}")
-      assert(r == Seq("ok"), s"$n: $r")
-    }
-    assert(f.ctrlPulses.nonEmpty && !f.running)
+    suite.run(None, Args(rep, configMap = ConfigMap("frames" -> "5000")))
     b.foreach(_.foreach(_.close()))
+    events.collect {
+      case x : TestSucceeded => x.testName -> "ok"
+      case x : TestFailed    => x.testName -> s"FAILED: ${x.message}"
+      case x : TestCanceled  => x.testName -> s"canceled: ${x.message}"
+    }.toMap
   }
+
+  def result(r : Map[String, String], name : String) : String =
+    r.collect { case (k, v) if k.contains(name) => v }.headOption.getOrElse(s"brak testu $name")
+
+  testpoint("host_hw_on_fakes") {
+    val clean = runOnFakes(_ => ())
+    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame")) {
+      info(s"$n: ${result(clean, n)}")
+      assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
+    }
+
+    val faulty = runOnFakes { bus =>
+      bus.fpgaRxFault = Some(150L -> (w => I2sWords(w.l, w.r ^ 1L)))
+      bus.espRxFault  = Some(200L -> (w => w.swap))
+    }
+    val rx = result(faulty, "hw_slv_rx_frame")
+    val tx = result(faulty, "hw_slv_tx_frame")
+    info(s"hw_slv_rx_frame z bledem: $rx")
+    info(s"hw_slv_tx_frame z bledem: $tx")
+    assert(rx.startsWith("FAILED") && rx.contains("ramka 150: przeklamane bity") && rx.contains("R xor=00000001"), rx)
+    assert(tx.startsWith("FAILED") && tx.contains("ramka 200: kanaly zamienione") && tx.contains("idx 200"), tx)
+  }
+
 }

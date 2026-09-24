@@ -7,7 +7,7 @@ import scala.util.chaining._
 
 // =====================================================================
 //  ZRODLO PLANU
-//  vertebra-hil.md §8 ("Plan I2S"), §10 etap 4. Testy sprzetowe:
+//  vertebra-hil.md §8 ("Plan I2S"), §10 etapy 4-5. Testy sprzetowe:
 //  prefiks hw_, w `checking` odsylaja do testpointu symulacyjnego, ktory
 //  uzupelniaja.
 //
@@ -21,6 +21,14 @@ import scala.util.chaining._
 //    sbt "hil/testOnly *I2sHilTestplan"                                   bez plytek: canceled
 //    sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
 //    sbt "hil/testOnly *I2sHilTestplan -- -z param"                       bez sprzetu
+//    sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dframes=100000"
+//        krotszy bieg hw_slv_* (domyslnie 10^6 ramek, kryterium etapu 5)
+//
+//  Scenariusze end-to-end: jedna konfiguracja, ta z I2sBenchCfg, ktora
+//  pasuje do wgranego wariantu (ESP32 z ta sama szerokoscia slowa).
+//  Kolejnosc jak w §3: start odbiornika przed nadawca, a stop odbiornika
+//  przed nadawca, zeby migawka byla z ciaglego strumienia, a nie z ciszy
+//  przy wylaczaniu. Obie strony najpierw w stop (SCK/WS w Z, §9).
 // =====================================================================
 
 object I2sHilPlan {
@@ -47,7 +55,27 @@ object I2sHilPlan {
         "esp32: brak resetu (log ROM) i obcych linii w trakcie testu",
         "fpga: magic, proto, ip_id, wariant; scratch wraca bez zmian bez jednego ponowienia",
         "fpga: statusy bad_sum, bad_addr, bad_op, busy; most porzuca niedokonczona ramke po 10 ms",
-        "fpga: stop daje migawke, stat sie parsuje")))
+        "fpga: stop daje migawke, stat sie parsuje")),
+
+    Testpoint("hw_slv_rx_frame", Stage.V1,
+      "ESP32 master nadaje wzorzec, FPGA slave (DUT) odbiera; uzupelnia slv_rx_frame",
+      stimulus = Seq("FPGA role=slave, ESP32 role=master tx=1 rx=0, konfiguracja wariantu",
+                     "-Dframes ramek (domyslnie 10^6: ok. 21 s przy 48 kHz)"),
+      checking = Seq("checker FPGA: lock, frames >= -Dframes, bad = gaps = relocks = overflow = 0",
+                     "przy bledzie: capture FPGA zdekodowany wzorcem (I2sDiag)")),
+
+    Testpoint("hw_slv_tx_frame", Stage.V1,
+      "FPGA slave (DUT) nadaje wzorzec, ESP32 master odbiera; uzupelnia slv_tx_frame",
+      stimulus = Seq("FPGA role=slave, ESP32 role=master tx=0 rx=1, konfiguracja wariantu",
+                     "-Dframes ramek"),
+      checking = Seq("checker ESP32: lock, frames >= -Dframes, bad = gaps = relocks = overflow = 0",
+                     "0 <= sent FPGA - frames ESP32 <= bufory DMA ESP32 z zapasem",
+                     "przy bledzie: dump ESP32 zdekodowany wzorcem (I2sDiag)")),
+
+    Testpoint("hw_la_crosscheck", Stage.V2,
+      "Logic analyzer zgadza sie z obiema plytkami",
+      stimulus = Seq("nagranie sigrok linii SCK/WS/SD w trakcie hw_slv_*"),
+      checking = Seq("SigrokI2sCheck na nagraniu: lock, zero bledow, ten sam wzorzec co liczniki plytek")))
 
   val seed = 0x5eed1234L
 }
@@ -56,6 +84,13 @@ class I2sHilTestplan extends HilSuite {
   import I2sHilPlan._
   def testplan : Seq[Testpoint] = plan
   def hilIp : HilIp = I2sHil
+
+  override def suiteOptions : Set[String] = Set("frames")
+
+  /** Ramki biegu hw_slv_* (kryterium etapu 5: 10^6). */
+  def runFrames : Long = option("frames").map { v =>
+    v.replace("_", "").toLongOption.filter(_ > 0).getOrElse(fail(s"-Dframes=$v: to nie liczba > 0"))
+  }.getOrElse(1000000L)
 
   /** Takt PLL ESP32-S3 (bez APLL, vertebra-hil.md §7). */
   val espPllHz = 160e6
@@ -191,4 +226,98 @@ class I2sHilTestplan extends HilSuite {
     assert(s.bad == 0 && s.relocks == 0, s"$s")
   }
 
+
+  // -------------------------------------------------------------------
+  //  hw_slv_*: ESP32 master, FPGA slave
+  // -------------------------------------------------------------------
+
+  /** Bufory DMA ESP32 w drodze (8 x 240 ramek, etap 3) z zapasem. */
+  val espInFlight = 4096L
+
+  /** Konfiguracja pasujaca do wgranego bitstreamu. */
+  def benchCfg(b : HilBench) : I2sBenchCfg = {
+    val v = b.fpgaInfo.flatMap(_.variant).flatMap(I2sFpgaMap.variant).getOrElse(fail("brak wariantu FPGA"))
+    I2sBenchCfg.all.find(c => c.v == v && c.espW == v.width).getOrElse(fail(s"brak konfiguracji dla ${v.name}"))
+  }
+
+  val seedStr = f"0x$seed%08x"
+
+  /** Obie strony w stop (SCK/WS w Z), FPGA slave, ESP32 master. */
+  def setupSlave(b : HilBench, c : I2sBenchCfg, espTx : Boolean, espRx : Boolean) : Unit = {
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
+    esp.stop(); fpga.stop()
+    fpga.cfg("role" -> "slave", "peer_w" -> c.espW, "slot" -> c.espSlot, "seed" -> seedStr,
+             "gap_mode" -> 0, "gap_every" -> 0, "gap_len" -> 0, "rst_count" -> 0)
+    esp.cfg("role" -> "master", "fs" -> c.espFs, "w" -> c.espW, "slot" -> c.espSlot, "seed" -> seedStr,
+            "peer_w" -> c.v.width, "tx" -> (if (espTx) 1 else 0), "rx" -> (if (espRx) 1 else 0), "loop" -> 0)
+    info(s"${c.name}: ${c.v.name}, ESP32 master fs=${c.espFs} w=${c.espW} slot=${c.espSlot}, " +
+         s"$runFrames ramek (~${runFrames / c.espFs} s)")
+  }
+
+  /** Czeka, az `count(stat ESP32)` dojdzie do n. Timeout z fs i zapasem. */
+  def waitEsp(b : HilBench, c : I2sBenchCfg, n : Long, what : String)(count : HilStat => Long) : Unit = {
+    val limitMs = n * 1000 / c.espFs * 3 / 2 + 10000
+    val t0 = System.currentTimeMillis
+    var last = b.esp.get.stat()
+    while (count(last) < n) {
+      if (System.currentTimeMillis - t0 > limitMs)
+        fail(s"$what: po ${limitMs / 1000} s tylko ${count(last)} z $n ramek; ESP32: $last")
+      Thread.sleep(scala.math.min(2000L, scala.math.max(100L, (n - count(last)) * 1000 / c.espFs)))
+      last = b.esp.get.stat()
+    }
+    info(f"$what: $n ramek w ${(System.currentTimeMillis - t0) / 1000.0}%.1f s")
+  }
+
+  /** Bieg bez bledu albo fail z dumpem zdekodowanym wzorcem. */
+  def expectClean(side : String, d : HilDevice, st : HilStat, link : I2sPattern.Link) : Unit = {
+    info(s"$side: $st")
+    if (!st.isClean(runFrames)) {
+      val dump = scala.util.Try(d.dump()).getOrElse(Nil)
+      fail(s"bieg z bledem (wymagane: lock, frames >= $runFrames, bad = gaps = relocks = overflow = 0)\n" +
+           I2sDiag.report(side, link, st, dump))
+    }
+  }
+
+  /** Na koniec zawsze obie strony w stop, nawet po bledzie. */
+  def safely(b : HilBench)(body : => Unit) : Unit =
+    try body finally { scala.util.Try(b.esp.get.stop()); scala.util.Try(b.fpga.get.stop()) }
+
+  hwScenario("hw_slv_rx_frame") { b =>
+    val c = benchCfg(b)
+    safely(b) {
+      setupSlave(b, c, espTx = true, espRx = false)
+      b.fpga.get.start()                                     // odbiornik przed zegarem
+      b.esp.get.start()
+      waitEsp(b, c, runFrames + espInFlight, "ESP32 nadal")(_.sent)
+      b.fpga.get.stop()                                      // odbiornik przed nadawca
+      val es = b.esp.get.stat()
+      b.esp.get.stop()
+      info(s"ESP32 (nadawca): $es")
+      val fs = b.fpga.get.stat()
+      expectClean("FPGA", b.fpga.get, fs, c.linkToFpga(seed, fpgaMaster = false))
+      assert(fs.frames <= es.sent, s"FPGA policzyl ${fs.frames} ramek, ESP32 nadal ${es.sent}")
+    }
+  }
+
+  hwScenario("hw_slv_tx_frame") { b =>
+    val c = benchCfg(b)
+    safely(b) {
+      setupSlave(b, c, espTx = false, espRx = true)
+      b.esp.get.start()                                      // zegar i odbiornik; FPGA jeszcze milczy
+      b.fpga.get.start()
+      waitEsp(b, c, runFrames, "ESP32 odebral")(_.frames)
+      b.esp.get.stop()                                       // odbiornik (i zegar) przed nadawca
+      b.fpga.get.stop()
+      val es = b.esp.get.stat()
+      val fs = b.fpga.get.stat()
+      info(s"FPGA (nadawca): sent=${fs.sent}")
+      expectClean("ESP32", b.esp.get, es, c.linkToEsp(seed, fpgaMaster = false))
+      val lag = fs.sent - es.frames
+      info(s"sent FPGA - frames ESP32 = $lag (ramki w DMA ESP32 w chwili stop)")
+      assert(lag >= 0 && lag <= espInFlight, s"sent FPGA ${fs.sent}, frames ESP32 ${es.frames}")
+    }
+  }
+
+  unimplemented("hw_la_crosscheck",
+    "brak analizatora stanow (vertebra-hil.md §11); SigrokI2sCheck jest gotowy (etap 3)")
 }
