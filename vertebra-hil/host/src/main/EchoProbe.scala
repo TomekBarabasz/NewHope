@@ -1,7 +1,7 @@
 package newhope.vertebra.hil
 
 import com.fazecast.jSerialComm.SerialPort
-import scala.util.{Failure, Random, Success, Try}
+import scala.util.Random
 
 // =====================================================================
 //  Etap 0 (vertebra-hil.md §10): czy oba porty stanowiska odpowiadaja
@@ -61,7 +61,7 @@ object EchoProbe {
       case Left(err) => println(s"$err\n$usage"); sys.exit(2)
     }
     if (opts.contains("--help")) { println(usage); sys.exit(0) }
-    if (opts.contains("--list")) { listPorts(); sys.exit(0) }
+    if (opts.contains("--list")) { HilSerial.listPorts(); sys.exit(0) }
 
     val chunks = opts.get("--chunks").map(_.toInt).getOrElse(64)   // 64 x 64 B = 4 KiB
     val seed   = opts.get("--seed").map(_.toLong).getOrElse(42L)
@@ -119,7 +119,7 @@ object EchoProbe {
   def probe(portName : String, baud : Int, chunks : Int, seed : Long,
             idleLines : Boolean = false,
             onJunk : Array[Byte] => Unit = _ => ()) : Either[String, Ok] = {
-    val port = resolvePort(portName) match {
+    val port = HilSerial.resolvePort(portName) match {
       case Right(p)  => p
       case Left(err) => return Left(err)
     }
@@ -182,60 +182,6 @@ object EchoProbe {
     } finally {
       port.closePort()
     }
-  }
-
-  /** Port po nazwie tak, jak podaje go uzytkownik na danym systemie:
-    * COM10 na Windows, /dev/ttyACM1 (albo ttyACM1) na Linuksie.
-    *
-    * Najpierw szukamy w enumeracji jSerialComm (getCommPorts) po nazwie
-    * systemowej albo pelnej sciezce, bez zgadywania formatu. Dopiero gdy
-    * portu tam nie ma (np. symlink /dev/serial/by-id/...), idziemy przez
-    * getCommPort, ktory rozwiazuje symlinki. getCommPort sam dokleja
-    * \\.\ albo /dev/ zaleznie od tego, za jaki system uzna maszyne;
-    * gdy to rozpoznanie zawiedzie, z COM10 robi /dev/COM10. */
-  def resolvePort(name : String) : Either[String, SerialPort] = {
-    val want = name.trim
-    val base = want.stripPrefix("\\\\.\\")          // \\.\COM10 -> COM10
-    Try(SerialPort.getCommPorts.toSeq) match {
-      case Failure(e) =>
-        Left(s"enumeracja portow nie dziala (natywna biblioteka jSerialComm?): $e")
-      case Success(all) =>
-        all.find(p => p.getSystemPortName.equalsIgnoreCase(base) ||
-                      p.getSystemPortPath.equalsIgnoreCase(want)) match {
-          case Some(p) => Right(p)
-          case None =>
-            Try(SerialPort.getCommPort(want)) match {
-              case Success(p) => Right(p)
-              case Failure(_) =>
-                if (all.isEmpty)
-                  Left(s"nie ma portu '$want', a enumeracja jest pusta (JVM: ${sys.props("os.name")}). " +
-                       envHint(want))
-                else
-                  Left(s"nie ma portu '$want' (widoczne: ${all.map(_.getSystemPortName).mkString(", ")})")
-            }
-        }
-    }
-  }
-
-  /** WSL: JVM widzi Linuksa, wiec jSerialComm szuka /dev/tty*, a porty COM
-    * Windowsa sa dla niej niewidoczne. Najczestsza przyczyna pustej listy. */
-  def isWsl : Boolean =
-    Try(scala.io.Source.fromFile("/proc/version").mkString.toLowerCase.contains("microsoft")).getOrElse(false)
-
-  def isContainer : Boolean = new java.io.File("/.dockerenv").exists
-
-  private def envHint(want : String) : String = {
-    val isWinName = want.toUpperCase.matches("COM\\d+")
-    if (isContainer)
-      "To jest kontener: widzi tylko urzadzenia przekazane przez --device. Na Windows " +
-      "uruchom EchoProbe poza kontenerem (sbt na hoscie) albo patrz tools/README.md."
-    else if (isWsl)
-      "To jest WSL: porty COM Windowsa tu nie istnieja. Uruchom sbt na Windows albo " +
-      "podepnij urzadzenie do WSL przez usbipd-win i podaj /dev/ttyACMx."
-    else if (isWinName && !sys.props("os.name").toLowerCase.contains("win"))
-      s"'$want' to nazwa portu Windows, a JVM dziala na innym systemie."
-    else
-      "System widzi porty, a jSerialComm nie? Sprawdz uprawnienia (Linux: grupa dialout)."
   }
 
   /** Wysyla 0x55 co 100 ms, az ktores wroci. Potem zbiera echa pozostalych
@@ -311,17 +257,6 @@ object EchoProbe {
       val asc = row.map(b => { val c = b & 0xFF; if (c >= 0x20 && c < 0x7F) c.toChar else '.' }).mkString
       println(f"[$label]   ${i * 16}%04x  $hex%-47s  $asc")
     }
-  }
-
-  private def listPorts() : Unit = {
-    val ports = SerialPort.getCommPorts
-    if (ports.isEmpty) println("Brak portow szeregowych.")
-    ports.foreach { p =>
-      println(f"${p.getSystemPortPath}%-22s VID:PID ${p.getVendorID}%04x:${p.getProductID}%04x  " +
-              s"${p.getDescriptivePortName}  sn=${p.getSerialNumber}")
-    }
-    println("Mimas V2 z firmware jimmo daje dwa porty (programator + UART FPGA); " +
-            "ESP32-S3 natywne USB ma VID 303a.")
   }
 
   /** "--opt wartosc", "--opt=wartosc" albo sama flaga. Nieznana opcja to
