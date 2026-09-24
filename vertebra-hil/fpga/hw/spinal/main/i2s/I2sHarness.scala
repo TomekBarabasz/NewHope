@@ -29,7 +29,8 @@ case class I2sHarnessPins() extends Bundle {
   val clkOe                     = out Bool()     // SCK/WS jako wyjscia (rola master)
 }
 
-case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long) extends Component {
+case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long,
+                      freqWindowCycles : Int = I2sHilRegs.FreqWindowCycles) extends Component {
   require(v.isLegal, s"nielegalny wariant $v")
 
   val io = new Bundle {
@@ -38,6 +39,7 @@ case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long) e
     val i2s  = I2sHarnessPins()
     val led  = out Bits(8 bits)
     val trig = out Bool()        // do analizatora: impuls przy pierwszym bledzie checkera (§9)
+    val dcm  = I2sDcmPins()      // programowanie zegara dut (I2sHarnessTop: DCM_CLKGEN)
   }
 
   val sysCd = ClockDomain(io.sysClk, io.sysRst)
@@ -46,7 +48,12 @@ case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long) e
   val counters = HilCounters(sysCd, dutCd)
   val capture  = HilCapture(sysCd, dutCd)
   val runRegs  = HilRunRegs(sysCd, dutCd)
-  val ipRegs   = I2sHilRegs(v, sysCd, dutCd)
+  /** M/D, ktore da DCM po konfiguracji (I2sHarnessTop liczy to samo). */
+  val dcm0     = { val (m, d, _) = DcmClkGen.best(bg.clkHz, v.dutHz); (m, d) }
+  val ipRegs   = I2sHilRegs(v, sysCd, dutCd, dcm0)
+  val freq     = HilFreqMeter(sysCd, dutCd, freqWindowCycles)
+  io.dcm <> ipRegs.io.dcm
+  ipRegs.io.dutFreq := freq.io.count
 
   val sys = new ClockingArea(sysCd) {
     val core = HilCore(bg, ascii4("I2S"), build, v.code)

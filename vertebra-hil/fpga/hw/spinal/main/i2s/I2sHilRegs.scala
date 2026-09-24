@@ -3,7 +3,7 @@ package newhope.vertebra.hil.i2s
 import spinal.core._
 import spinal.lib._
 import newhope.i2s.{I2sGenerics, I2sSlaveGenerics}
-import newhope.vertebra.hil.HilRegMap
+import newhope.vertebra.hil.{DcmProg, DcmProgrammer, HilRegMap}
 
 // =====================================================================
 //  Wariant bitstreamu I2S (vertebra-hil.md §6, contract/i2s/commands.md).
@@ -56,12 +56,27 @@ object I2sHilRegs {
   val Slot  = 0x102
   val RoleSlave  = 0
   val RoleMaster = 1
+
+  /** Zegar dut (hw_clock_ratio_sweep): M/D DCM_CLKGEN w biegu. */
+  val DcmMd     = 0x103     // RW w stop: M 8:0, D 24:16 (DcmProg.encode); zapis programuje DCM
+  val DcmStatus = 0x104     // R: bity DcmBit
+  val DutFreq   = 0x105     // R: cykle dut w oknie FreqWindowCycles cykli sys (HilFreqMeter)
+  object DcmBit { val Locked = 0; val Busy = 1; val ProgDone = 2; val Rejected = 3; val Timeout = 4 }
+  /** Okno pomiaru na plytce: 10 ms przy sys 100 MHz. */
+  val FreqWindowCycles = 1000000
+}
+
+/** Sygnaly programowania DCM_CLKGEN (domena sys = PROGCLK). */
+case class I2sDcmPins() extends Bundle {
+  val progEn, progData = out Bool()
+  val locked, progDone = in  Bool()   // LOCKED asynchroniczny, PROGDONE synchroniczny z PROGCLK
 }
 
 /** Rejestry 0x100-: zapis w stop, zatrzasniecie w domenie dut przy starcie
   * (jak HilRunRegs; wazne od dutGo). Po resecie rola slave: FPGA nie
   * steruje SCK/WS, wiec nie walczy z ESP32 skonfigurowanym jako master. */
-case class I2sHilRegs(v : I2sHilVariant, sysCd : ClockDomain, dutCd : ClockDomain) extends Component {
+case class I2sHilRegs(v : I2sHilVariant, sysCd : ClockDomain, dutCd : ClockDomain,
+                      dcm0 : (Int, Int) = (2, 1)) extends Component {
   import I2sHilRegs._
 
   val io = new Bundle {
@@ -69,6 +84,8 @@ case class I2sHilRegs(v : I2sHilVariant, sysCd : ClockDomain, dutCd : ClockDomai
     val running  = in  Bool()
     val dutStart = in  Bool()
     val dutCfg   = out(I2sHilCfg())
+    val dcm      = I2sDcmPins()
+    val dutFreq  = in UInt(24 bits)
   }
 
   private def initCfg : I2sHilCfg = {
@@ -86,6 +103,31 @@ case class I2sHilRegs(v : I2sHilVariant, sysCd : ClockDomain, dutCd : ClockDomai
     map.rw(Role,  cfg.master, locked = true)
     map.rw(PeerW, cfg.peerW,  locked = true)
     map.rw(Slot,  cfg.slot,   locked = true)
+
+    // --- zegar dut: M/D DCM -----------------------------------------------
+    // Po konfiguracji M/D z generykow DCM (dcm0). Nowe M/D tylko w stop i nie
+    // szybciej niz dcm0: TS_dut w .ucf jest liczony dla zegaru wariantu.
+    val (m0, d0) = dcm0
+    val md  = Reg(Bits(32 bits)) init B(DcmProg.encode(m0, d0), 32 bits)
+    val wr  = map.rwPulse(DcmMd, md, locked = true)
+    val m   = md(8 downto 0).asUInt
+    val d   = md(24 downto 16).asUInt
+    val ok  = m >= 2 && m <= 256 && d >= 1 && d <= 256 && (m * U(d0, 9 bits)) <= (U(m0, 9 bits) * d)
+    val prog = DcmProgrammer()
+    // Zapis dziala na koncu cyklu `wr`, wiec `ok` dla nowego M/D jest znany
+    // dopiero cykl pozniej (w cyklu wr md ma jeszcze stara wartosc).
+    val wrD = RegNext(wr) init False
+    prog.io.go := wrD && ok
+    prog.io.m  := m
+    prog.io.d  := d
+    io.dcm.progEn   := prog.io.progEn
+    io.dcm.progData := prog.io.progData
+    prog.io.progDone := io.dcm.progDone
+    val rejected = RegInit(False)
+    when(wrD) { rejected := !ok }
+    val locked = BufferCC(io.dcm.locked, False)
+    map.ro(DcmStatus, prog.io.timeout ## rejected ## RegNext(io.dcm.progDone) ## prog.io.busy ## locked)
+    map.ro(DutFreq, io.dutFreq)
     map.build()
   }
 
