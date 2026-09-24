@@ -50,9 +50,8 @@ case class I2sHarnessTop(v : I2sHilVariant,
   dcm.io.CLKIN     := io.clk
   dcm.io.RST       := False
   dcm.io.FREEZEDCM := False
-  dcm.io.PROGCLK   := False
-  dcm.io.PROGDATA  := False
-  dcm.io.PROGEN    := False
+  // PROGCLK = zegar sys: DcmProgrammer w harnessie pracuje w tej domenie.
+  dcm.io.PROGCLK   := io.clk
 
   val bufg = Bufg()
   bufg.io.I := dcm.io.CLKFX
@@ -71,6 +70,11 @@ case class I2sHarnessTop(v : I2sHilVariant,
 
   // --- harness -------------------------------------------------------------
   val h = I2sHarness(v, bg, build)
+  require(h.dcm0 == ((dcmM, dcmD)), s"M/D top ${(dcmM, dcmD)} != harness ${h.dcm0}")
+  dcm.io.PROGDATA := h.io.dcm.progData
+  dcm.io.PROGEN   := h.io.dcm.progEn
+  h.io.dcm.locked   := dcm.io.LOCKED
+  h.io.dcm.progDone := dcm.io.PROGDONE
   h.io.sysClk := io.clk
   h.io.sysRst := por.rst
   h.io.dutClk := dut_clk

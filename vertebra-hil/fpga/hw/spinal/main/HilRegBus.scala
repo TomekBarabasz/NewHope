@@ -87,6 +87,17 @@ class HilRegMap(bus : HilRegBus, lock : Bool) {
     r
   }
 
+  /** Jak `rw`, a do tego impuls w cyklu przyjetego zapisu (np. start
+    * operacji z zapisanymi parametrami). Odrzucony zapis (Busy) go nie daje. */
+  def rwPulse[T <: Data](addr : Int, r : T, locked : Boolean) : Bool = {
+    val w = r.getBitsWidth
+    require(w <= 32, s"rwPulse $addr: $w bitow")
+    val p = Bool()
+    p := False
+    add(Entry(addr, r.asBits.resize(32), Some { d => r.assignFromBits(d.resize(w)); p := True }, locked))
+    p
+  }
+
   /** Rejestr impulsowy: zapis daje valid na jeden cykl z danymi, odczyt 0. */
   def strobe(addr : Int) : Flow[Bits] = {
     val f = Flow(Bits(32 bits))
