@@ -164,6 +164,7 @@ class I2sHilTestplan extends HilSuite {
     info(s"stat: $stat")
 
     val t0 = System.nanoTime
+    HilProgress("esp32: selftest (wektory + petla wewnetrzna, kilka sekund)")
     val n  = d.selftest()
     info(f"selftest: $n wektorow w ${(System.nanoTime - t0) / 1e9}%.1f s")
     assert(n == I2sHil.selftestVectors, s"firmware ma $n wektorow, kontrakt ${I2sHil.selftestVectors}")
@@ -264,6 +265,8 @@ class I2sHilTestplan extends HilSuite {
         fail(s"$what: po ${limitMs / 1000} s tylko ${count(last)} z $n ramek; ESP32: $last")
       Thread.sleep(scala.math.min(2000L, scala.math.max(100L, (n - count(last)) * 1000 / c.espFs)))
       last = b.esp.get.stat()
+      HilProgress(f"$what: ${count(last)}%d / $n%d ramek, ${(System.currentTimeMillis - t0) / 1000}%d s " +
+                  s"(limit ${limitMs / 1000} s)")
     }
     info(f"$what: $n ramek w ${(System.currentTimeMillis - t0) / 1000.0}%.1f s")
   }

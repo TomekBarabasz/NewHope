@@ -94,7 +94,47 @@ class HilBench(val ip : HilIp,
   def close() : Unit = devices.foreach(d => Try(d.close()))
 }
 
+/** Postep na stdout, na biezaco. Wyniki ScalaTest (info) sbt pokazuje
+  * dopiero po zakonczeniu testu, a biegi hw_* trwaja dziesiatki sekund:
+  * bez tego zawieszenie i dlugi bieg wygladaja tak samo. */
+object HilProgress {
+  /** Po tylu sekundach bez postepu watchdog wypisuje stos watku testu. */
+  val StallS = 60
+
+  @volatile private var last    = System.nanoTime
+  @volatile private var watched : Option[(Thread, String)] = None
+  @volatile private var warned  = false
+
+  def apply(msg : String) : Unit = {
+    val t = java.time.LocalTime.now.truncatedTo(java.time.temporal.ChronoUnit.SECONDS)
+    println(s"[hil $t] $msg")
+    System.out.flush()
+    last = System.nanoTime; warned = false
+  }
+
+  private lazy val watchdog : Thread = {
+    val th = new Thread(() => while (true) {
+      Thread.sleep(5000)
+      watched.foreach { case (t, what) =>
+        if (!warned && System.nanoTime - last > StallS * 1000000000L) {
+          warned = true
+          apply(s"$what: brak postepu od $StallS s, watek testu stoi w:\n" +
+                t.getStackTrace.take(25).map("    at " + _).mkString("\n"))
+        }
+      }
+    }, "hil-watchdog")
+    th.setDaemon(true); th.start(); th
+  }
+
+  /** Pilnuje biezacego watku do `unwatch` (HilSuite.hwScenario). */
+  def watch(what : String) : Unit = { watchdog; last = System.nanoTime; warned = false
+                                      watched = Some(Thread.currentThread -> what) }
+  def unwatch() : Unit = watched = None
+}
+
 object HilBench {
+  /** Wzgledem katalogu roboczego testow, czyli vertebra-hil/host (forkSettings). */
+  val logRoot = new File("target/hil-logs")
   private val cache = scala.collection.mutable.Map[String, Either[String, Option[HilBench]]]()
 
   /** Jedna instancja na JVM i IP: porty sa otwierane raz, przy pierwszym
@@ -118,10 +158,14 @@ object HilBench {
                                      (mk : HilPort => D)(check : D => Either[String, Opened[D]])
                                      : Either[String, Opened[D]] =
     opener(port, baud, idle) match {
-      case Left(e) => Left(s"$label: $e (port z $from$portHint)")
+      case Left(e) => HilProgress(s"$label: $e"); Left(s"$label: $e (port z $from$portHint)")
       case Right(p) =>
         val d = mk(p)
+        val log = new File(new File(logRoot, "_open"), s"$label.log")
+        d.link.logTo(Some(log))
+        HilProgress(s"$label: port $port otwarty, sprawdzam plytke (log: ${log.getAbsolutePath})")
         val r = Try(check(d)).fold(e => Left(s"$label ($port z $from): ${e.getMessage}"), identity)
+        r.fold(e => HilProgress(s"$label: BLAD $e"), o => HilProgress(s"$label: ${o.info}"))
         if (r.isLeft) Try(d.close())
         r
     }

@@ -63,7 +63,9 @@ class HilLink(val port : HilPort, val label : String, val text : Boolean) {
 
   def send(b : Array[Byte]) : Unit = {
     logBytes(">", b)
-    if (!port.write(b)) throw new HilLinkError(s"$label: zapis do ${port.name} nie powiodl sie")
+    if (!port.write(b))
+      throw new HilLinkError(s"$label: zapis do ${port.name} nie powiodl sie w ${HilSerial.WriteTimeoutMs} ms " +
+        "(plytka nie odbiera: ESP32 w trybie pobierania po flash? RST albo odlaczenie zasilania)")
   }
 
   def send(s : String) : Unit = send(s.getBytes("US-ASCII"))
@@ -137,6 +139,8 @@ class HilLink(val port : HilPort, val label : String, val text : Boolean) {
 object HilSerial {
   /** Okno odpytywania portu: read wraca najpozniej po tym czasie. */
   val PollMs = 20
+  /** Zapis, ktory nie skonczy sie w tym czasie, jest bledem, a nie zawieszeniem. */
+  val WriteTimeoutMs = 2000
 
   private class SerialHilPort(p : SerialPort) extends HilPort {
     def name : String = p.getSystemPortName
@@ -152,7 +156,10 @@ object HilSerial {
     resolvePort(name).flatMap { port =>
       port.setComPortParameters(baud, 8, SerialPort.ONE_STOP_BIT, SerialPort.NO_PARITY)
       port.setFlowControl(SerialPort.FLOW_CONTROL_DISABLED)
-      port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING, PollMs, 0)
+      // Zapis z timeoutem: bez niego writeBytes na Windows czeka bez konca,
+      // gdy druga strona nie odbiera (np. ESP32 w trybie pobierania po flash).
+      port.setComPortTimeouts(SerialPort.TIMEOUT_READ_SEMI_BLOCKING | SerialPort.TIMEOUT_WRITE_BLOCKING,
+                              PollMs, WriteTimeoutMs)
       // Wywolane PRZED openPort ustawiaja stan poczatkowy linii (jSerialComm
       // stosuje go przy otwarciu), wiec linie nie zmieniaja sie wcale.
       if (idleLines) { port.clearDTR(); port.clearRTS() }
