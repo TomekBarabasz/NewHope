@@ -462,7 +462,14 @@ Etapy 2 i 3 są niezależne i mogą iść równolegle.
 - W roli master ESP32 slave przeżył 20 przerw w zegarze bez trwałego przesunięcia kanałów (#9513).
 - Pierwszy błąd FPGA w roli master (`got_l == got_r`) to ramka z oboma kanałami równymi zaraz po resecie mastera.
 
-`hw_soak (fpga_master)`, `-Dsoak_s=600`, `v32_32`: 600,2 s full duplex, ESP32 odebrał 28 804 559 ramek, FPGA 28 804 827, po obu stronach `bad = gaps = relocks = overflow = 0`. ESP32 slave z zegarem FPGA przez 10 min bez błędu wyrównania kanałów (#9513).
+`hw_soak`, `-Dsoak_s=600`, `v32_32`, full duplex, po obu stronach w obu rolach `bad = gaps = relocks = overflow = 0`:
+
+| Rola FPGA | Czas | ESP32 frames | FPGA frames |
+| --- | --- | --- | --- |
+| slave | 600,2 s | 28 804 799 | 28 805 075 |
+| master | 600,2 s | 28 804 559 | 28 804 827 |
+
+Kryterium „10 min soak na każdą rolę bez błędu” jest spełnione. ESP32 slave z zegarem FPGA przez 10 min nie przestawił kanałów (#9513). Z etapu 7 zostaje `hw_clock_ratio_sweep` (krok 2).
 
 **Stan etapu 7 (2026-09-24), krok 1: V3 bez nowego bitstreamu.**
 
