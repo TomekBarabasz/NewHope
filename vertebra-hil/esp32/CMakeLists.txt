@@ -11,7 +11,10 @@ cmake_minimum_required(VERSION 3.16)
 execute_process(COMMAND git rev-parse --short=8 HEAD
                 WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                 OUTPUT_VARIABLE HIL_GIT_HASH OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-execute_process(COMMAND git status --porcelain
+# "-dirty" tylko przy zmianach w zrodlach firmware (jak I2sHil.espSources
+# na hoscie), a nie w calym repo: kod hosta czy bitstream FPGA w repo nie
+# zmieniaja firmware'u.
+execute_process(COMMAND git status --porcelain -- . ":(exclude)test" ":(exclude)echo" ../contract/i2s/vectors
                 WORKING_DIRECTORY ${CMAKE_CURRENT_LIST_DIR}
                 OUTPUT_VARIABLE HIL_GIT_DIRTY OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
 execute_process(COMMAND git rev-parse --absolute-git-dir

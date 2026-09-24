@@ -42,12 +42,8 @@ object I2sHil extends HilIp {
     ":(exclude)vertebra-hil/esp32/test",      // testy na PC
     ":(exclude)vertebra-hil/esp32/echo",      // osobny projekt z etapu 0
     "vertebra-hil/contract/i2s/vectors")      // wbudowane przez EMBED_TXTFILES
-  val fpgaSources = Seq(
-    "vertebra-hil/fpga/hw",
-    ":(exclude)vertebra-hil/fpga/hw/spinal/test",
-    ":(exclude)vertebra-hil/fpga/hw/gen",     // wyniki (Verilog, .bin): commit bitstreamu to nie zmiana zrodel
-    "i2s/hw/spinal/main",                     // DUT-y
-    "mimas_v2/hw/spinal/main")
+  /** Ta sama lista, z ktorej harness liczy flage dirty w rejestrze build. */
+  val fpgaSources = HilBuildInfo.sources
 
   val espFlashHint  = "Przeflashuj: cd vertebra-hil/esp32 && idf.py build flash"
   val fpgaFlashHint = "Wgraj bitstream: I2sHarnessTop_<wariant> -> ISE -> .bin, tools/programmer.py"
