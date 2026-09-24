@@ -1,0 +1,50 @@
+# =====================================================================
+#  I2sHarnessTop_<wariant> na Mimas V2 (XC6SLX9-2 CSG324).
+#  Zegar, UART i diody jak hil_echo.ucf; I2S na headerze P7
+#  (contract/i2s/commands.md, "Piny").
+# =====================================================================
+CONFIG VCCAUX = "3.3" ;
+
+NET "clk" LOC = V10 | IOSTANDARD = LVCMOS33 ;
+NET "clk" TNM_NET = "TN_sys" ;
+TIMESPEC "TS_sys" = PERIOD "TN_sys" 10 ns HIGH 50 % ;
+
+# Zegar dut. ISE NIE wyprowadza PERIOD przez DCM_CLKGEN, gdy na wyjsciu
+# jest wlasna grupa TNM_NET - bez tej linii domena dut (wiekszosc logiki)
+# byla nieograniczona, a raport i tak pisal "All constraints were met".
+# 20 ns = 50 MHz: ostrzej niz kazdy wariant (najszybszy 49,15 MHz), wiec
+# jeden UCF dla wszystkich wariantow.
+NET "dut_clk" TNM_NET = "TN_dut" ;
+TIMESPEC "TS_dut" = PERIOD "TN_dut" 20 ns HIGH 50 % ;
+
+# Sciezki miedzy domenami: wszystkie przejscia sa zrobione celowo
+# (BufferCC, migawka przy stop, zatrzask przy starcie, BRAM dwuportowy),
+# a statyczna analiza i tak nie mialaby ich jak zamknac.
+TIMESPEC "TS_sys_dut" = FROM "TN_sys" TO "TN_dut" TIG ;
+TIMESPEC "TS_dut_sys" = FROM "TN_dut" TO "TN_sys" TIG ;
+
+# UART do PIC-a. Nazwy Numato opisuja strone PIC-a: A8 = wejscie FPGA.
+NET "uart_rxd" LOC = A8 | IOSTANDARD = LVCMOS33 ;
+NET "uart_txd" LOC = B8 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = FAST ;
+
+NET "led[0]" LOC = P15 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[1]" LOC = P16 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[2]" LOC = N15 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[3]" LOC = N16 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[4]" LOC = U17 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[5]" LOC = U18 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[6]" LOC = T17 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "led[7]" LOC = T18 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+
+# I2S, header P7, zgodnie z vertebra-hil.md §9:
+#   P7-1 U8 SCK, P7-2 V8 WS, P7-3 R8 SD_E2F (ESP32 -> FPGA),
+#   P7-4 T8 SD_F2E (FPGA -> ESP32), P7-5 R5 TRIG.
+# SLEW = SLOW: kilka MHz po przewodach, mniej dzwonienia.
+# Podciagniecia trzymaja linie w stanie spoczynku, gdy nikt ich nie steruje
+# (rola slave przed skonfigurowaniem ESP32): SCK = 0, WS = 1 (jak master
+# po resecie), SD_IN = 0.
+NET "i2s_sck"    LOC = U8 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW | PULLDOWN ;
+NET "i2s_ws"     LOC = V8 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW | PULLUP ;
+NET "i2s_sd_in"  LOC = R8 | IOSTANDARD = LVCMOS33 | PULLDOWN ;
+NET "i2s_sd_out" LOC = T8 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;
+NET "i2s_trig"   LOC = R5 | IOSTANDARD = LVCMOS33 | DRIVE = 8 | SLEW = SLOW ;

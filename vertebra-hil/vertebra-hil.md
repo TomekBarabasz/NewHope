@@ -260,7 +260,7 @@ Jeden bitstream na **wariant** IP, zawierający wspólny rdzeń (UART, rejestry,
 
 Z [dokumentacji Mimas V2](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/):
 
-- **XC6SLX9 (CSG324).** Mały układ, więc zajętość trzeba sprawdzić po pierwszej syntezie. Plan awaryjny: osobne bitstreamy dla roli master i slave (podział wariantów o rolę).
+- **XC6SLX9-3CSG324** (stopień szybkości -3; `PART = xc6slx9-3-csg324`). Największy wariant (`v32_32`) zajmuje 79 % slice'ów (59 % LUT-ów), więc w bitstreamie I2S jest miejsce na drobne dodatki, a nie na drugi duży blok (§10, wyniki etapu 2). Plan awaryjny: osobne bitstreamy dla roli master i slave (podział wariantów o rolę).
 - **Toolchain: ISE 14.7.** Spartan-6 nie jest wspierany przez Vivado. Spinal generuje Verilog, ISE robi resztę z `-g binary`; `.bin` idzie do flash przez XMODEM (`programmer.py` z repozytorium firmware albo `sx`).
 - **UART 115200 przez PIC z firmware [jimmo/numato-mimasv2-pic-firmware](https://github.com/jimmo/numato-mimasv2-pic-firmware).** Płytka wystawia dwa porty USB: jeden do programowania flash SPI (XMODEM), drugi to UART FPGA. Przełącznik SW7 przestaje być potrzebny, więc flashowanie i testy mogą iść z jednego skryptu bez ręcznej obsługi. Przy 115200 odczyt liczników to kilka ms, a zrzut bufora ułamek sekundy. Baud zostaje generykiem harnessu, na wypadek płytki z fabrycznym firmware (19200).
 - **32 GPIO na złączach P6–P9.** Piny P9 leżą w banku 1 dzielonym z LPDDR: napięcie tego banku trzeba sprawdzić w schemacie, a do czasu sprawdzenia używamy tylko P6–P8.
@@ -387,13 +387,13 @@ Suity `hil` nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecu
 
 Cztery linie sygnałowe, jedna linia wyzwalania i masa. Linie danych mają stały kierunek fizyczny niezależnie od roli; kierunek zmieniają tylko SCK i WS.
 
-| Linia | Kierunek | Mimas V2 (propozycja) | Uwagi |
+| Linia | Kierunek | Mimas V2 | Uwagi |
 | --- | --- | --- | --- |
 | SCK | zależy od roli | P7-1 (U8) | 100 Ω szeregowo |
 | WS | zależy od roli | P7-2 (V8) | 100 Ω szeregowo |
 | SD\_E2F | ESP DOUT → FPGA | P7-3 (R8) | harness kieruje ją do `sdi` mastera albo wejścia danych slave'a |
 | SD\_F2E | FPGA → ESP DIN | P7-4 (T8) | 33 Ω szeregowo przy FPGA |
-| TRIG | FPGA → logic analyzer | P7-5 (R5) | impuls przy pierwszym błędzie checkera |
+| TRIG | FPGA → logic analyzer | P7-5 (R5) | impuls ~5 µs (256 cykli `dut`) przy pierwszym błędzie checkera w biegu |
 | GND | — | P7-9, P7-10 | co najmniej dwa przewody masy |
 
 Numery pinów FPGA pochodzą z [tabeli złącz Mimas V2](https://numato.com/docs/mimas-v2-spartan-6-fpga-development-board-with-ddr-sdram/). P7 leży w banku 2; zanim cokolwiek podłączymy, schemat musi potwierdzić VCCO = 3,3 V dla tego banku. Piny ESP32-S3 dobieramy pod konkretny dev board (§7).
@@ -435,6 +435,30 @@ Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
 Etap 2 idzie krokami, każdy z własnym zielonym testplanem: 2a most i rejestry rdzenia (`HilCoreTestplan`, na płytce `HilCoreTop`), 2b `I2sPatternGen`/`Check` na wektorach kontraktu, 2c liczniki z migawką CDC, capture i wstrzykiwanie resetu, 2d `I2sHarness` z DUT-ami przez UART, 2e synteza w ISE.
 
+#### Wyniki etapu 2 (ISE 14.7, XC6SLX9-3CSG324)
+
+Zajętość po mapowaniu, największy wariant `v32_32` (pozostałe są mniejsze):
+
+| Zasób | Zajęte | % |
+| --- | --- | --- |
+| Slice'y | 1 139 / 1 430 | 79 % |
+| LUT-y | 3 404 / 5 720 | 59 % |
+| Rejestry | 2 704 / 11 440 | 23 % |
+| RAMB8 | 1 / 64 | 1 % |
+| BUFG | 2 / 16 | 12 % |
+| DCM\_CLKGEN | 1 / 4 | 25 % |
+
+Timing po trasowaniu, bitstreamy z pinami i TRIG z §9 (minimalny okres; wymagane: `TS_sys` 10 ns, `TS_dut` 20 ns, czyli ostrzej niż najszybszy wariant 49,15 MHz). Wszystkie warianty: 0 błędów timingu.
+
+| Wariant | `TS_sys` | Zapas | `TS_dut` | Zapas |
+| --- | --- | --- | --- | --- |
+| `v16_32` | 7,947 ns | 2,05 ns | 11,010 ns | 8,99 ns |
+| `v24_32` | 9,257 ns | 0,74 ns | 10,641 ns | 9,36 ns |
+| `v16_16` | 9,537 ns | 0,46 ns | 10,147 ns | 9,85 ns |
+| `v32_32` | 8,213 ns | 1,79 ns | 10,285 ns | 9,72 ns |
+
+Domena `dut` ma duży zapas we wszystkich wariantach. Domena `sys` jest ciasna i jej wynik skacze między przebiegami PAR (ten sam most: od 7,9 do 9,5 ns), bo decyduje o nim rozmieszczenie, a nie logika. Najdłuższa ścieżka to dekodowanie odpowiedzi w moście (`addr` → `rdata`) przez multipleksery odczytu wszystkich bloków rejestrów. Każda zmiana w `HilUartBridge`, `HilRegMap` albo dołożenie rejestrów wymaga ponownego sprawdzenia timingu; gdy zapas zejdzie do zera, pierwsza poprawka to rejestr na `rdata`/`status` z `HilRegBus` (most czeka wtedy o cykl dłużej w stanie `exec`).
+
 ### Potem I2C
 
 Przy I2C bez zmian powinny przejść: `HilLink`, `HilDevice`, `HilBench`, `HilSuite`, `hil_cmd`, most UART, rejestry rdzenia, liczniki, bufor przechwytywania i wstrzykiwanie resetu. Nowe będą: wzorzec transakcji zamiast ramek, `I2cHarness`, `main/i2c_role.c`, `I2cHilTestplan` oraz elektryka open-drain (pull-upy, czasy narastania, clock stretching przez ESP32), czyli to, czego symulacja nie ma wcale.
@@ -467,7 +491,7 @@ Otwarte pytania:
 - [ ] Piny ESP32-S3 na posiadanym dev boardzie (wolne od strapping, USB i pamięci modułu). Płytka ma natywne USB i mostek CH343 na UART0 (§7).
 - [ ] Dlaczego `sdkconfig.defaults` był pomijany przy odtwarzaniu `sdkconfig` (§7): zweryfikować po `idf.py save-defconfig` i poprawić plik w repo.
 - [ ] Jaki logic analyzer jest dostępny i czy obsłuży BCLK 6,144 MHz.
-- [ ] Zajętość XC6SLX9 z oboma DUT-ami: po pierwszej syntezie w etapie 2.
+- [x] Zajętość XC6SLX9 z oboma DUT-ami: mieści się, `v32_32` 79 % slice'ów (§10, wyniki etapu 2).
 - [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
 - [ ] Kandydat na partnera zapasowego, gdyby S3 slave okazał się niewiarygodny.
 

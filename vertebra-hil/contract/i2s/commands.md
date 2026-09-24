@@ -52,3 +52,17 @@ Warianty (`I2sHilVariant`; zegar `dut` stały w wariancie, `dut = fs · 2 · slo
 | `0x102` | `slot` | RW | slot na magistrali dla checkera: w roli master `slotWidth` wariantu, w roli slave slot ESP32; po resecie `slotWidth` |
 
 Zapis tylko w stanie stop, zatrzaśnięcie przy `start` (jak rejestry biegu). Host sprawdza przed startem `Link(seed, peer_w, slot, width).checkable`.
+
+## FPGA: piny
+
+Header P7 Mimas V2 (`fpga/hw/ise/i2s_harness.ucf`, `vertebra-hil.md` §9), LVCMOS33:
+
+| Linia | Pin FPGA | Kierunek | Spoczynek |
+| --- | --- | --- | --- |
+| SCK | P7-1, U8 | wyjście w roli master, inaczej wejście | pull-down |
+| WS | P7-2, V8 | wyjście w roli master, inaczej wejście | pull-up |
+| SD\_E2F (ESP32 DOUT → FPGA) | P7-3, R8 | wejście | pull-down |
+| SD\_F2E (FPGA → ESP32 DIN) | P7-4, T8 | wyjście | — |
+| TRIG | P7-5, R5 | wyjście: impuls ~5 µs przy pierwszym błędzie checkera w biegu | — |
+
+Do tego masa (P7-9, P7-10). Piny ESP32 ustala etap 3.

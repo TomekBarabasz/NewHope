@@ -112,7 +112,8 @@ object I2sHarnessPlan {
     Testpoint("harness_capture", Stage.V1,
       "Przeklamana ramka od ESP32: first_err i capture",
       checking = Seq("bad == 1, relocks == 0", "first_err == ramka przeklamana / oczekiwana",
-                     "w capture jest wpis z tym samym got/exp, idx rosnace, cap_count == 32")),
+                     "w capture jest wpis z tym samym got/exp, idx rosnace, cap_count == 32",
+                     "TRIG: dokladnie jeden impuls, 256 cykli dut")),
     Testpoint("harness_soft_reset", Stage.V1,
       "Soft reset w trakcie biegu",
       checking = Seq("po ctrl.soft_reset: running == 0", "kolejny bieg czysty (bad == 0, frames > 0)"))
@@ -345,6 +346,11 @@ class I2sHarnessTestplan extends TestplanSuite {
         case (f, _)               => f
       }
       val m = e.espMaster(v.width, 32, frames)
+      val trigHigh = mutable.ArrayBuffer[Long]()          // cykle dut z TRIG = 1
+      fork {
+        var c = 0L
+        while (true) { e.dutCd.waitSampling(); c += 1; if (e.d.io.trig.toBoolean) trigHigh += c }
+      }
       e.host.setup(master = false, peerW = v.width, slot = 32)
       e.host.start()
       assert(m.frames.size < badAt - 20, s"bieg zaczal sie za pozno (${m.frames.size})")
@@ -365,6 +371,8 @@ class I2sHarnessTestplan extends TestplanSuite {
       val idx = cap.map(_.head).sorted
       assert(idx == (idx.head until idx.head + idx.size), s"indeksy capture nieciagle: $idx")
       assert(hit.head.head == idx.head + Capture.Depth / 2, "blad nie w polowie okna")
+      assert(trigHigh.size == 256 && trigHigh.last - trigHigh.head == 255,
+             s"TRIG: ${trigHigh.size} cykli, od ${trigHigh.headOption} do ${trigHigh.lastOption}")
     }
 
     scenario(v, "harness_soft_reset") { e =>

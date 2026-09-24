@@ -37,6 +37,7 @@ case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long) e
     val uart = master(Uart())
     val i2s  = I2sHarnessPins()
     val led  = out Bits(8 bits)
+    val trig = out Bool()        // do analizatora: impuls przy pierwszym bledzie checkera (§9)
   }
 
   val sysCd = ClockDomain(io.sysClk, io.sysRst)
@@ -151,6 +152,14 @@ case class I2sHarness(v : I2sHilVariant, bg : HilBridgeGenerics, build : Long) e
     require(words.size == Counters.names.size)
     counters.io.dutStop := stopDut
     for ((w, i) <- words.zipWithIndex) counters.io.dutWords(i) := w
+
+    // --- TRIG: pierwszy blad w biegu, rozciagniety do TrigCycles --------
+    // Analizator 24 MS/s widzi impuls >= ~40 ns; 256 cykli dut to ~5 us.
+    val TrigCycles = 256
+    val firstBad = chk.io.badPulse && !chk.io.stat.errValid
+    val trigCnt  = Reg(UInt(log2Up(TrigCycles + 1) bits)) init 0
+    when(firstBad) { trigCnt := TrigCycles } elsewhen(trigCnt =/= 0) { trigCnt := trigCnt - 1 }
+    io.trig := RegNext(trigCnt =/= 0) init False
   }
 
   // --- status i diody (sys) -----------------------------------------------
