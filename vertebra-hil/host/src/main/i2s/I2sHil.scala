@@ -103,6 +103,12 @@ object I2sBenchCfg {
   def fsFractional(v : I2sHilVariant) : I2sBenchCfg =
     I2sBenchCfg(s"44k1_${v.width}in${v.slotWidth}", v, 44100, v.width, v.slotWidth)
 
+  /** hw_clock_ratio_sweep: ESP32 master z fs wariantu w slocie 32 (FPGA
+    * slave przyjmie dowolny slot). Slot 32 trzyma granice f* ~18-19 MHz,
+    * w zasiegu DCM; przy slocie 16 spadlaby ponizej 10 MHz. */
+  def sweep(v : I2sHilVariant) : I2sBenchCfg =
+    I2sBenchCfg(s"sweep_${v.fs}_${v.width}in32", v, v.fs, v.width, 32)
+
   /** Wszystkie biegi V2 wariantu: (konfiguracja, czy FPGA moze byc masterem). */
   def v2(v : I2sHilVariant) : Seq[(I2sBenchCfg, Boolean)] =
     padding(v).map(_ -> false).toSeq ++ Seq(lsbAcrossWs(v) -> false, mismatch(v) -> true, fsFractional(v) -> false)
