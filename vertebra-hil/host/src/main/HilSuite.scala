@@ -41,6 +41,10 @@ trait HilSuite extends TestplanSuite {
   def hwScenario(name : String, variant : String = "", needs : Set[HilSide.Value] = HilSide.Both)
                 (body : HilBench => Unit) : Unit =
     testpoint(name, variant) {
+      val bad = HilBenchOpts.unknown(configMap)
+      if (bad.nonEmpty)
+        fail(s"nieznane opcje suity: ${bad.map("-D" + _).mkString(", ")} " +
+             s"(znane: ${HilBenchOpts.known.toSeq.sorted.map("-D" + _).mkString(", ")})")
       val b = bench match {
         case Left(e) => fail(s"stanowisko: $e")
         case Right(x) => x
