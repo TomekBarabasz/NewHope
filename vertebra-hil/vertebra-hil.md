@@ -450,6 +450,22 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Stan etapu 7 (2026-09-24), krok 1: V3 bez nowego bitstreamu.**
+
+- `hw_startup_mid_frame`: ESP32 master nadaje bez przerwy, a FPGA 20 razy robi soft reset (DUT slave w resecie przez 16 cykli) w losowej chwili, start, 100 ms, stop. Każdy start: lock i zero błędów (niepełna ramka jest przed lockiem).
+- `hw_random_reset` w obu rolach, full duplex: `HilResetInjector` robi 20 resetów po 500 cykli `dut` (ok. 10 µs) co 21–106 ms (`rst_min` 0x100000, `rst_mask` 0x3FFFFF). Czas ostatniego resetu host liczy z `HilResetModel` i zegara z DCM, potem czyta liczniki ESP32 w biegu przed i po ogonie `-Dframes_v2` ramek. Wymagania:
+  - ogon bez nowego błędu (DUT wraca sam);
+  - `rst_done == 20`;
+  - FPGA w locku w chwili stop;
+  - 0 < `bad + relocks + gaps` ≤ 8 na reset po każdej stronie (reset ma być widoczny, ale ograniczony).
+
+  W roli master reset DUT-a to przerwa w zegarze ESP32 slave'a, czyli kolejne sprawdzenie #9513.
+- `hw_soak` w obu rolach: full duplex przez `-Dsoak_s` sekund; bez tej opcji *canceled*, bo kryterium to 10 min na rolę:
+  ```
+  sbt "hil/testOnly *I2sHilTestplan -- -z hw_soak -Desp_com=COM11 -Dfpga_com=COM12 -Dsoak_s=600"
+  ```
+- `hw_clock_ratio_sweep`: `unimplemented` do kroku 2 (dynamiczne M/D DCM\_CLKGEN w harnessie, nowy bitstream).
+
 **Stan etapu 6 (2026-09-24).** Scenariusze w `I2sHilTestplan`, uruchamiane raz na każdy wgrany wariant bitstreamu (konfiguracja wybiera się sama po rejestrze `variant`):
 
 - V1 (`-Dframes`, domyślnie 10^6): `hw_slv_rx_frame`, `hw_slv_tx_frame`, `hw_mst_rx_frame`, `hw_mst_tx_frame`. Wszystkie cztery liczy jedna funkcja (rola FPGA × kierunek): start odbiornika przed nadawcą, stop odbiornika przed nadawcą.

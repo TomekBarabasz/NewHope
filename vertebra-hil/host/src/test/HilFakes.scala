@@ -36,6 +36,8 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
   var running  = false
   /** Po kazdym impulsie ctrl (model magistrali: FakeI2sBus). */
   var onCtrl : Int => Unit = _ => ()
+  /** Dodatkowe bity status (model magistrali: lock). */
+  var extraStatus : () => Long = () => 0L
   var snapshot = false
   val ctrlPulses = mutable.ArrayBuffer[Int]()             // bity ctrl, ktore zadzialaly
   val writes     = mutable.ArrayBuffer[(Int, Long)]()     // udane zapisy RW
@@ -76,7 +78,7 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
     case Addr.Build   => Right(build)
     case Addr.Ctrl    => Right(0L)
     case Addr.Status  => Right((if (running) 1L << StatusBit.Running else 0L) |
-                               (if (snapshot) 1L << StatusBit.Snapshot else 0L))
+                               (if (snapshot) 1L << StatusBit.Snapshot else 0L) | extraStatus())
     case Addr.Variant => Right(variantCode)
     case x if x >= Counters.Base && x < Counters.Base + Counters.names.size =>
       Right(counters(Counters.names(x - Counters.Base)))

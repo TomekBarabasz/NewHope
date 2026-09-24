@@ -115,6 +115,28 @@ object I2sHilPlan {
       stimulus = Seq("FPGA slave, ESP32 master fs 44100, w/slot wariantu, oba kierunki"),
       checking = Seq("oba kierunki czyste mimo jittera BCLK")),
 
+    Testpoint("hw_startup_mid_frame", Stage.V3,
+      "DUT slave wychodzi z resetu w srodku ramki; uzupelnia slv_startup_mid_frame",
+      stimulus = Seq("ESP32 master nadaje bez przerwy; 20 x: soft reset FPGA w losowej chwili, start, 100 ms, stop"),
+      checking = Seq("kazdy start: lock, frames >= polowa ramek w 100 ms, bad = gaps = relocks = overflow = 0")),
+
+    Testpoint("hw_random_reset", Stage.V3,
+      "Reset DUT-a w losowych chwilach, full duplex; uzupelnia *_random_reset",
+      stimulus = Seq("HilResetInjector: 20 resetow po 500 cykli dut co 21-106 ms; obie role"),
+      checking = Seq("rst_done == 20; FPGA: lock w chwili stop, 0 < bad + relocks + gaps <= 8 na reset",
+                     "ESP32: po ostatnim resecie -Dframes_v2 ramek bez nowego bledu (wraca sam)",
+                     "rola master: ESP32 slave przezywa przerwy w zegarze (esp-idf #9513)")),
+
+    Testpoint("hw_clock_ratio_sweep", Stage.V3,
+      "Zegar DUT-a slave przesuwany do granicy supportsSckHalf",
+      stimulus = Seq("dynamiczne M/D DCM_CLKGEN, ESP32 master 48 kHz"),
+      checking = Seq("znaleziona granica zgodna z supportsSckHalf (polokres SCK > txLatencyCycles)")),
+
+    Testpoint("hw_soak", Stage.V3,
+      "Dlugi bieg full duplex, tylko sprzet",
+      stimulus = Seq("-Dsoak_s sekund na role (kryterium etapu 7: 600); bez opcji canceled"),
+      checking = Seq("oba checkery: zero bledow przez caly bieg")),
+
     Testpoint("hw_la_crosscheck", Stage.V2,
       "Logic analyzer zgadza sie z obiema plytkami",
       stimulus = Seq("nagranie sigrok linii SCK/WS/SD w trakcie hw_slv_*"),
@@ -128,7 +150,7 @@ class I2sHilTestplan extends HilSuite {
   def testplan : Seq[Testpoint] = plan
   def hilIp : HilIp = I2sHil
 
-  override def suiteOptions : Set[String] = Set("frames", "frames_v2")
+  override def suiteOptions : Set[String] = Set("frames", "frames_v2", "soak_s")
 
   private def frameOpt(k : String, dflt : Long) : Long = option(k).map { v =>
     v.replace("_", "").toLongOption.filter(_ > 0).getOrElse(fail(s"-D$k=$v: to nie liczba > 0"))
@@ -294,12 +316,16 @@ class I2sHilTestplan extends HilSuite {
   /** Obie strony w stop (SCK/WS w Z, §9), potem cfg: FPGA w roli
     * `fpgaMaster`, ESP32 w przeciwnej. Slot na magistrali daje master. */
   def setup(b : HilBench, c : I2sBenchCfg, fpgaMaster : Boolean, espTx : Boolean, espRx : Boolean,
-            n : Long = runFrames, gap : (Int, Int, Int) = (0, 0, 0)) : Unit = {
+            n : Long = runFrames, gap : (Int, Int, Int) = (0, 0, 0),
+            rst : Option[ResetPlan] = None) : Unit = {
     val (esp, fpga) = (b.esp.get, b.fpga.get)
     esp.stop(); fpga.stop()
     val slot = if (fpgaMaster) c.v.slotWidth else c.espSlot
     fpga.cfg("role" -> (if (fpgaMaster) "master" else "slave"), "peer_w" -> c.espW, "slot" -> slot,
-             "seed" -> seedStr, "gap_mode" -> gap._1, "gap_every" -> gap._2, "gap_len" -> gap._3, "rst_count" -> 0)
+             "seed" -> seedStr, "gap_mode" -> gap._1, "gap_every" -> gap._2, "gap_len" -> gap._3)
+    val r = rst.getOrElse(ResetPlan(0, 0, 0, 0, 1))
+    fpga.cfg("rst_count" -> r.count, "rst_seed" -> f"0x${r.seed}%08x", "rst_min" -> r.min,
+             "rst_mask" -> r.mask, "rst_len" -> r.len)
     // ESP32 slave: fs to tylko nominal do DMA i zegara modulu (§7), ESP32 idzie za SCK FPGA.
     esp.cfg("role" -> (if (fpgaMaster) "slave" else "master"), "fs" -> c.espFs, "w" -> c.espW, "slot" -> slot,
             "seed" -> seedStr, "peer_w" -> c.v.width, "tx" -> (if (espTx) 1 else 0), "rx" -> (if (espRx) 1 else 0),
@@ -315,13 +341,18 @@ class I2sHilTestplan extends HilSuite {
     val limitMs = n * 1000 / c.espFs * 3 / 2 + 10000
     val t0 = System.currentTimeMillis
     var last = b.esp.get.stat()
+    var shown = 0L
     while (count(last) < n) {
       if (System.currentTimeMillis - t0 > limitMs)
         fail(s"$what: po ${limitMs / 1000} s tylko ${count(last)} z $n ramek; ESP32: $last")
       Thread.sleep(scala.math.min(2000L, scala.math.max(100L, (n - count(last)) * 1000 / c.espFs)))
       last = b.esp.get.stat()
-      HilProgress(f"$what: ${count(last)}%d / $n%d ramek, ${(System.currentTimeMillis - t0) / 1000}%d s " +
-                  s"(limit ${limitMs / 1000} s)")
+      // co najwyzej co 10 s: hw_soak trwa minuty
+      if (System.currentTimeMillis - shown >= 10000 || count(last) >= n) {
+        shown = System.currentTimeMillis
+        HilProgress(f"$what: ${count(last)}%d / $n%d ramek, ${(System.currentTimeMillis - t0) / 1000}%d s " +
+                    s"(limit ${limitMs / 1000} s)")
+      }
     }
     info(f"$what: $n ramek w ${(System.currentTimeMillis - t0) / 1000.0}%.1f s")
   }
@@ -473,6 +504,116 @@ class I2sHilTestplan extends HilSuite {
     oneWay(b, c, fpgaMaster = false, dutRx = true, v2Frames)
     oneWay(b, c, fpgaMaster = false, dutRx = false, v2Frames)
   }
+
+  // -------------------------------------------------------------------
+  //  V3
+  // -------------------------------------------------------------------
+
+  /** hw_startup_mid_frame: DUT slave wychodzi z resetu (soft reset) w
+    * losowym miejscu ramki, a ESP32 master nadaje bez przerwy. Kazdy start
+    * osobno: checker FPGA musi zlapac lock bez jednego bledu - ramka
+    * niepelna jest przed lockiem i sie nie liczy. */
+  val startups = 20
+
+  hwScenario("hw_startup_mid_frame") { b =>
+    val c = benchCfg(b)
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
+    val perRunMs = 100L
+    val minFrames = c.espFs * perRunMs / 1000 / 2
+    val rng = new scala.util.Random(seed)
+    safely(b) {
+      setup(b, c, fpgaMaster = false, espTx = true, espRx = false, minFrames * startups)
+      esp.start()
+      val locks = (0 until startups).map { k =>
+        // Ramka trwa ~21 us, a opoznienie USB i tak jest losowe; dodatkowe
+        // opoznienie rozrzuca starty po wielu ramkach.
+        Thread.sleep(rng.nextInt(20).toLong)
+        fpga.softReset(); fpga.start()
+        Thread.sleep(perRunMs)
+        fpga.stop()
+        val st = fpga.stat()
+        if (!st.isClean(minFrames))
+          failWithDump("FPGA", fpga, st, c.linkToFpga(seed, fpgaMaster = false),
+                       s"start $k z $startups: wymagane lock, frames >= $minFrames, zero bledow")
+        st.lockAt
+      }
+      HilProgress(s"hw_startup_mid_frame: $startups startow czystych")
+      info(s"$startups startow DUT-a w srodku ramki, lock_at: min ${locks.min}, max ${locks.max}")
+    }
+  }
+
+  /** Reset DUT-a z HilResetInjector: `count` resetow, opoznienia z seeda. */
+  case class ResetPlan(count : Int, seed : Long, min : Long, mask : Long, len : Int)
+
+  /** 20 resetow po 500 cykli dut (~10 us, pol ramki), co 21-106 ms. */
+  def resetPlan(fpgaMaster : Boolean) : ResetPlan =
+    ResetPlan(20, seed ^ (if (fpgaMaster) 0x11110000L else 0x22220000L), 0x100000L, 0x3FFFFFL, 500)
+
+  /** Bledy na jeden reset, ponad ktore uznajemy, ze DUT nie wraca sam. */
+  val errorsPerReset = 8
+
+  /** hw_random_reset: full duplex, DUT resetowany w losowych chwilach.
+    * Po ostatnim resecie oba kierunki wracaja: ESP32 sprawdzany na ogonie
+    * (liczniki w biegu przed i po `tail` ramkach - zadnego nowego bledu),
+    * FPGA: lock w chwili stop, rst_done == count, bledy ograniczone. */
+  def randomReset(b : HilBench, c : I2sBenchCfg, fpgaMaster : Boolean, tail : Long) : Unit = {
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
+    val (master, slave) = if (fpgaMaster) (fpga : HilDevice, esp : HilDevice) else (esp : HilDevice, fpga : HilDevice)
+    val r = resetPlan(fpgaMaster)
+    val (_, _, dutHz) = DcmClkGen.best(HilBridgeGenerics().clkHz, c.v.dutHz)
+    val lastAt = HilResetModel.schedule(r.seed, r.count, r.min, r.mask, r.len).last
+    val doneMs = (lastAt / dutHz * 1000).toLong + 300
+    safely(b) {
+      setup(b, c, fpgaMaster, espTx = true, espRx = true, tail, rst = Some(r))
+      slave.start(); master.start()
+      HilProgress(s"${r.count} resetow DUT-a w ciagu ~$doneMs ms")
+      Thread.sleep(doneMs)
+      val s1 = esp.stat()
+      waitEsp(b, c, s1.frames + tail, "ESP32 po resetach")(_.frames)
+      val s2 = esp.stat()
+      val locked = (fpga.status() & (1L << StatusBit.Locked)) != 0
+      fpga.stop(); esp.stop()
+      val fs = fpga.stat()
+      info(s"ESP32 po resetach: $s1")
+      info(s"ESP32 na koncu:    $s2")
+      info(s"FPGA: $fs, lock w chwili stop: $locked")
+
+      val rstDone = fs.extra.get("rst_done").flatMap(_.toLongOption).getOrElse(-1L)
+      assert(rstDone == r.count, s"rst_done $rstDone, oczekiwane ${r.count} (resety nie zdazyly?)")
+
+      def errs(st : HilStat) = st.bad + st.relocks + st.gaps
+      val limit = errorsPerReset.toLong * r.count
+      val espTailClean = s2.bad == s1.bad && s2.relocks == s1.relocks && s2.gaps == s1.gaps &&
+                         s2.overflow == s1.overflow && s2.frames - s1.frames >= tail && s2.locked
+      if (!espTailClean)
+        failWithDump("ESP32", esp, s2, c.linkToEsp(seed, fpgaMaster),
+          s"po ostatnim resecie $tail ramek bez nowego bledu; przed ogonem: $s1")
+      if (errs(s1) > limit)
+        failWithDump("ESP32", esp, s1, c.linkToEsp(seed, fpgaMaster), s"bledy ${errs(s1)} > $limit na ${r.count} resetow")
+      if (!locked || errs(fs) > limit || errs(fs) == 0 || fs.frames < tail)
+        failWithDump("FPGA", fpga, fs, c.linkToFpga(seed, fpgaMaster),
+          s"lock w chwili stop, 0 < bledy <= $limit (reset musi byc widoczny), frames >= $tail")
+      info(f"na reset: FPGA ${errs(fs).toDouble / r.count}%.1f bledow, ESP32 ${errs(s1).toDouble / r.count}%.1f")
+    }
+  }
+
+  hwScenario("hw_random_reset", "fpga_slave")  { b => randomReset(b, benchCfg(b), fpgaMaster = false, v2Frames) }
+  hwScenario("hw_random_reset", "fpga_master") { b => randomReset(b, benchCfg(b), fpgaMaster = true,  v2Frames) }
+
+  /** hw_soak: dlugi full duplex, zero bledow. Tylko na zadanie (-Dsoak_s),
+    * bo kryterium etapu 7 to 10 min na role. */
+  def soak(b : HilBench, fpgaMaster : Boolean) : Unit = {
+    val secs = option("soak_s").map(v => v.toLongOption.filter(_ > 0).getOrElse(fail(s"-Dsoak_s=$v")))
+      .getOrElse(cancel("dlugi test: uruchom z -Dsoak_s=600 (10 min na role, kryterium etapu 7)"))
+    val c = benchCfg(b)
+    duplex(b, c, fpgaMaster, c.espFs.toLong * secs)
+  }
+
+  hwScenario("hw_soak", "fpga_slave")  { b => soak(b, fpgaMaster = false) }
+  hwScenario("hw_soak", "fpga_master") { b => soak(b, fpgaMaster = true) }
+
+  unimplemented("hw_clock_ratio_sweep",
+    "wymaga dynamicznego M/D DCM_CLKGEN w harnessie (nowy bitstream), krok 2 etapu 7")
 
   unimplemented("hw_la_crosscheck",
     "brak analizatora stanow (vertebra-hil.md §11); SigrokI2sCheck jest gotowy (etap 3)")

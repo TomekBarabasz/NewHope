@@ -314,7 +314,8 @@ class HilHostTestplan extends TestplanSuite {
                   "hw_mst_rx_frame", "hw_mst_tx_frame",
                   "hw_full_duplex (fpga_slave)", "hw_full_duplex (fpga_master)", "hw_padding", "hw_lsb_across_ws",
                   "hw_word_length_mismatch", "hw_tx_underrun (fpga_slave)", "hw_tx_underrun (fpga_master)",
-                  "hw_fs_fractional")) {
+                  "hw_fs_fractional", "hw_startup_mid_frame",
+                  "hw_random_reset (fpga_slave)", "hw_random_reset (fpga_master)")) {
       info(s"$n: ${result(clean, n)}")
       assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
     }
