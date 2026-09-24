@@ -91,8 +91,13 @@ Warianty (`I2sHilVariant`; zegar `dut` stały w wariancie, `dut = fs · 2 · slo
 | `0x100` | `role` | RW | 0 = FPGA slave (SCK/WS wejścia), 1 = FPGA master; po resecie 0, żeby FPGA nie walczył z ESP32-masterem |
 | `0x101` | `peer_w` | RW | szerokość słowa ESP32 (`Wtx` checkera FPGA), po resecie `width` wariantu |
 | `0x102` | `slot` | RW | slot na magistrali dla checkera: w roli master `slotWidth` wariantu, w roli slave slot ESP32; po resecie `slotWidth` |
+| `0x103` | `dcm_md` | RW | M/D DCM\_CLKGEN zegara `dut`: M w bitach 8:0, D w 24:16; po resecie M/D wariantu. Zapis (tylko w stop) programuje DCM w biegu; M/D poza zakresem (M 2…256, D 1…256) albo szybsze niż wariant (`TS_dut` w `.ucf`) harness odrzuca bez programowania |
+| `0x104` | `dcm_status` | R | bit 0 LOCKED, 1 programowanie trwa, 2 PROGDONE, 3 ostatni zapis `dcm_md` odrzucony, 4 PROGDONE nie wrócił (timeout 10 ms) |
+| `0x105` | `dut_freq` | R | cykle `dut` w ostatnim oknie 1 000 000 cykli `sys` (10 ms): f\_dut = `dut_freq` · 100 Hz |
 
-Zapis tylko w stanie stop, zatrzaśnięcie przy `start` (jak rejestry biegu). Host sprawdza przed startem `Link(seed, peer_w, slot, width).checkable`.
+Zapis tylko w stanie stop, zatrzaśnięcie przy `start` (jak rejestry biegu). Programowanie DCM (`dcm_md`) trzyma domenę `dut` w resecie do LOCKED: konfiguracja domeny `dut` wraca do wartości po resecie i zatrzaskuje się od nowa przy następnym `start`.
+
+Programowanie DCM\_CLKGEN (UG382, na PROGCLK = zegar `sys`): LoadD (PROGEN przez 10 cykli, PROGDATA 1, 0, D−1 od LSB), 2 cykle przerwy, LoadM (1, 1, M−1), 2 cykle przerwy, GO (PROGEN przez 1 cykl, PROGDATA 0), potem czekanie na PROGDONE. Zgodność z krzemem sprawdza `dut_freq` po każdym programowaniu (`hw_clock_ratio_sweep`). Host sprawdza przed startem `Link(seed, peer_w, slot, width).checkable`.
 
 ## FPGA: piny
 

@@ -450,6 +450,24 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Stan etapu 7 (2026-09-24), krok 2: `hw_clock_ratio_sweep`.**
+
+- **Harness.** `DcmProgrammer` programuje M/D DCM\_CLKGEN w biegu (UG382; PROGCLK = `sys`) za rejestrem `dcm_md` (`0x103`, tylko w stop, nie szybciej niż wariant). Do tego `dcm_status` (`0x104`) i `dut_freq` (`0x105`): `HilFreqMeter` liczy cykle `dut` w oknie 10 ms zegara `sys`. Pomiar jest potrzebny, bo protokół DCM w symulacji jest modelem, a nie krzemem; na płytce po każdym programowaniu host porównuje zmierzony zegar z M/D.
+- **Symulacja.** `DcmModel` dekoduje PROGEN/PROGDATA niezależnie od RTL i zmienia okres zegara `dut`. `harness_dcm` sprawdza:
+  - odrzucenie zbyt szybkiego M/D;
+  - `busy` w biegu;
+  - sekwencję LoadD/LoadM/GO;
+  - pomiar;
+  - czysty bieg po zmianie zegara.
+
+  Symulacja złapała błąd: sprawdzenie M/D liczyło się ze starej wartości rejestru. `hilFpga/test`: 93/93.
+- **Host.** `hw_link (fpga)` mierzy zegar wariantu (0,2 %). `hw_clock_ratio_sweep` (FPGA slave, ESP32 master z fs i słowem wariantu w slocie 32, full duplex) robi 24 punkty M/D od zegara wariantu do max(0,5 f\*, 10 MHz), gdzie f\* = txLatency / (1/(2 BCLK) − 1/160 MHz) ≈ 19,2 MHz (48 kHz) albo 17,6 MHz (44,1 kHz). Wymagania:
+  - każdy punkt zmierzony w 0,2 % od M/D;
+  - punkty bezpieczne według `supportsSckHalf` czyste w obu kierunkach;
+  - poniżej f\* pojawiają się błędy, pierwszy nie dalej niż 0,5 f\*;
+  - na końcu M/D wariantu wraca.
+- **Na stanowisku.** Wymaga nowych bitstreamów wszystkich wariantów (zmienione źródła harnessu).
+
 **Wyniki etapu 7, krok 1, na płytce (2026-09-24), wariant `v32_32`.** `hw_startup_mid_frame` i `hw_random_reset` w obu rolach zielone. Na 20 resetów (200 000 ramek ogona, bez nowego błędu po ostatnim resecie):
 
 | Rola FPGA | FPGA: bad / relocks / gaps | ESP32: bad / relocks / gaps | Błędów na reset (FPGA / ESP32) |

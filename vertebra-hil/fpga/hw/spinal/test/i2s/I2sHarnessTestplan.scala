@@ -79,6 +79,71 @@ class I2sPinRx(sck : Bool, ws : Bool, sd : Bool, rxW : Int, cd : ClockDomain) {
   }
 }
 
+/** Zegar dut o zmiennym okresie i model DCM_CLKGEN po stronie PROG*.
+  *
+  * Model dekoduje PROGEN/PROGDATA na zboczu PROGCLK (= sys) wedlug UG382,
+  * niezaleznie od RTL: burst 10 bitow "10"+D-1 albo "11"+M-1, GO = PROGEN
+  * na jeden cykl z PROGDATA = 0. Po GO: PROGDONE i LOCKED w dol, dut w
+  * resecie, nowy okres = round(10 ns * D / M), po `relockNs` znow LOCKED.
+  * Jak na plytce (I2sHarnessTop), reset dut trwa, dopoki nie ma LOCKED. */
+class DcmModel(d : I2sHarness, sysCd : ClockDomain, var periodNs : Int, relockNs : Long = 2000) {
+  val loads   = mutable.ArrayBuffer[(Char, Int)]()          // ('D' | 'M', wartosc)
+  val applied = mutable.ArrayBuffer[(Int, Int)]()            // (M, D) po GO
+  val errors  = mutable.ArrayBuffer[String]()
+  private var pendM, pendD = Option.empty[Int]
+
+  def start() : Unit = {
+    d.io.dcm.locked #= true
+    d.io.dcm.progDone #= true
+    d.io.dutRst #= true
+    d.io.dutClk #= false
+    fork {                                                   // zegar dut
+      while (true) { sleep(scala.math.max(1, periodNs / 2)); d.io.dutClk #= !d.io.dutClk.toBoolean }
+    }
+    fork { sleep(20L * periodNs); d.io.dutRst #= false }     // reset po wlaczeniu
+    fork {                                                   // dekoder PROG*
+      val burst = mutable.ArrayBuffer[Boolean]()
+      var en = false
+      while (true) {
+        sysCd.waitSampling()
+        val e = d.io.dcm.progEn.toBoolean
+        if (e) burst += d.io.dcm.progData.toBoolean
+        if (en && !e) decode(burst.toSeq)
+        if (!e) burst.clear()
+        en = e
+      }
+    }
+  }
+
+  private def decode(b : Seq[Boolean]) : Unit = b match {
+    case Seq(false) => go()
+    case Seq(true, isM, rest @ _*) if rest.size == 8 =>
+      val v = rest.zipWithIndex.map { case (x, i) => if (x) 1 << i else 0 }.sum + 1
+      loads += ((if (isM) 'M' else 'D', v))
+      if (isM) pendM = Some(v) else pendD = Some(v)
+      d.io.dcm.progDone #= false
+    case other => errors += s"nieznany burst PROGEN: ${other.map(if (_) 1 else 0).mkString}"
+  }
+
+  private def go() : Unit = (pendM, pendD) match {
+    case (Some(m), Some(dv)) =>
+      applied += ((m, dv))
+      pendM = None; pendD = None
+      d.io.dcm.locked #= false
+      d.io.dutRst #= true
+      fork {
+        sleep(relockNs / 2)
+        periodNs = scala.math.max(2, scala.math.round(10.0 * dv / m).toInt)
+        sleep(relockNs / 2)
+        d.io.dcm.locked #= true
+        d.io.dcm.progDone #= true
+        sleep(10L * periodNs)
+        d.io.dutRst #= false
+      }
+    case _ => errors += s"GO bez LoadD/LoadM (M=$pendM, D=$pendD)"
+  }
+}
+
 object I2sHarnessPlan {
   val plan : Seq[Testpoint] = Seq(
     Testpoint("harness_param_bounds", Stage.V1,
@@ -114,12 +179,21 @@ object I2sHarnessPlan {
       checking = Seq("bad == 1, relocks == 0", "first_err == ramka przeklamana / oczekiwana",
                      "w capture jest wpis z tym samym got/exp, idx rosnace, cap_count == 32",
                      "TRIG: dokladnie jeden impuls, 256 cykli dut")),
+    Testpoint("harness_dcm", Stage.V1,
+      "Zegar dut w biegu: M/D DCM_CLKGEN z rejestru i pomiar czestotliwosci",
+      stimulus = Seq("model DcmModel dekoduje PROGEN/PROGDATA wg UG382 i zmienia okres zegara dut"),
+      checking = Seq("dcm_md po resecie = M/D wariantu; M/D szybsze od wariantu -> rejected, bez programowania",
+                     "zapis w biegu -> busy; poprawny zapis -> LoadD, LoadM, GO z tymi wartosciami",
+                     "po GO: busy do PROGDONE, locked wraca; dut_freq zgodne z nowym okresem",
+                     "po zmianie zegara bieg w roli slave czysty")),
     Testpoint("harness_soft_reset", Stage.V1,
       "Soft reset w trakcie biegu",
       checking = Seq("po ctrl.soft_reset: running == 0", "kolejny bieg czysty (bad == 0, frames > 0)"))
   )
 
   val bg        = HilBridgeGenerics(baud = 1562500L, timeoutUs = 100L)
+  /** Okno pomiaru zegara dut w symulacji: 200 us zamiast 10 ms. */
+  val simFreqWindow = 20000
   val sysPeriod = 10
   val dutPeriod = 21
   val seed      = 0x600dfeedL
@@ -175,7 +249,7 @@ class I2sHarnessTestplan extends TestplanSuite {
   }
 
   case class Env(d : I2sHarness, v : I2sHilVariant, sysCd : ClockDomain, dutCd : ClockDomain,
-                 uart : HilUartSim, host : Host) {
+                 uart : HilUartSim, host : Host, dcm : DcmModel) {
     def patternFrames(espW : Int, n : Int) : Seq[Frame] =
       (0 until n).map { k => val f = I2sPattern.frame(seed, k.toLong, espW); Frame(f.l, f.r) }
 
@@ -217,20 +291,22 @@ class I2sHarnessTestplan extends TestplanSuite {
     testpoint(tp, variant = v.name + sub) {
       val dut = compiled.getOrElseUpdate(v.name, Config.sim
         .workspaceName(s"harness_${v.name}_${SimBackend.default.label}")
-        .compile(I2sHarness(v, bg, build)))
+        .compile(I2sHarness(v, bg, build, simFreqWindow)))
       dut.doSim(s"harness_${v.name}_$tp$sub", seed = 42) { d =>
         val sysCd = ClockDomain(d.io.sysClk, d.io.sysRst)
         val dutCd = ClockDomain(d.io.dutClk, d.io.dutRst)
         d.io.i2s.sckIn #= false; d.io.i2s.wsIn #= true; d.io.i2s.sdIn #= false
         sysCd.forkStimulus(period = sysPeriod)
-        dutCd.forkStimulus(period = dutPeriod)
+        val dcm = new DcmModel(d, sysCd, dutPeriod)
+        dcm.start()
         val u = new HilUartSim(sysCd, d.io.uart.rxd, d.io.uart.txd, scala.math.round(1e9 / bg.baud))
         u.start()
-        val e = Env(d, v, sysCd, dutCd, u, new Host(new HilRegClient(u), sysCd))
+        val e = Env(d, v, sysCd, dutCd, u, new Host(new HilRegClient(u), sysCd), dcm)
         SimTimeout(60L * 1000 * 1000)                       // 60 ms czasu symulacji
         sysCd.waitSampling(50)
         body(e)
         u.checkFraming()
+        assert(dcm.errors.isEmpty, dcm.errors.mkString("; "))
       }
     }
 
@@ -296,7 +372,7 @@ class I2sHarnessTestplan extends TestplanSuite {
       assert(c.readOk(I2sHilRegs.Role) == I2sHilRegs.RoleSlave, "po resecie rola slave")
       assert(c.readOk(I2sHilRegs.PeerW) == v.width && c.readOk(I2sHilRegs.Slot) == v.slotWidth)
       c.writeOk(I2sHilRegs.PeerW, 24); assert(c.readOk(I2sHilRegs.PeerW) == 24)
-      assert(c.read(0x103).status == Status.BadAddr)
+      assert(c.read(I2sHilRegs.DutFreq + 1).status == Status.BadAddr)
       e.host.start()
       assert(c.write(I2sHilRegs.Role, 1).status == Status.Busy, "zapis roli w biegu")
       assert(c.readOk(I2sHilRegs.Role) == I2sHilRegs.RoleSlave)
@@ -373,6 +449,48 @@ class I2sHarnessTestplan extends TestplanSuite {
       assert(hit.head.head == idx.head + Capture.Depth / 2, "blad nie w polowie okna")
       assert(trigHigh.size == 256 && trigHigh.last - trigHigh.head == 255,
              s"TRIG: ${trigHigh.size} cykli, od ${trigHigh.headOption} do ${trigHigh.lastOption}")
+    }
+
+    scenario(v, "harness_dcm") { e =>
+      import I2sHilRegs.{DcmMd, DcmStatus, DutFreq, DcmBit}
+      val c = e.host.cli
+      val (m0, d0) = e.d.dcm0
+      def status = c.readOk(DcmStatus)
+      def bit(b : Int) = ((status >> b) & 1) == 1
+      def waitIdle(what : String) : Unit = {
+        var k = 0
+        while (bit(DcmBit.Busy)) { k += 1; assert(k < 200, s"$what: busy bez konca") }
+      }
+      assert(c.readOk(DcmMd) == DcmProg.encode(m0, d0), "po resecie M/D wariantu")
+      assert(bit(DcmBit.Locked) && !bit(DcmBit.Busy))
+
+      // Szybciej niz wariant: odrzucone, bez jednego bitu na PROG*
+      c.writeOk(DcmMd, DcmProg.encode(m0 + 1, d0))
+      waitIdle("za szybki")
+      assert(bit(DcmBit.Rejected) && e.dcm.loads.isEmpty, s"${e.dcm.loads}")
+      c.writeOk(DcmMd, DcmProg.encode(1, 8))                  // M < 2
+      assert(bit(DcmBit.Rejected) && e.dcm.loads.isEmpty)
+
+      e.host.start()
+      assert(c.write(DcmMd, DcmProg.encode(2, 8)).status == Status.Busy, "zapis M/D w biegu")
+      e.host.stop()
+
+      // 100 MHz * 2 / 8 = 25 MHz: okres 40 ns
+      c.writeOk(DcmMd, DcmProg.encode(2, 8))
+      waitIdle("programowanie")
+      assert(e.dcm.loads.toSeq == Seq('D' -> 8, 'M' -> 2), s"${e.dcm.loads}")
+      assert(e.dcm.applied.toSeq == Seq((2, 8)))
+      assert(bit(DcmBit.Locked) && bit(DcmBit.ProgDone) && !bit(DcmBit.Rejected) && !bit(DcmBit.Timeout))
+      assert(e.dcm.periodNs == 40)
+
+      sleep((2L * simFreqWindow + 500) * sysPeriod)            // dwa pelne okna pomiaru
+      val cnt = c.readOk(DutFreq)
+      val exp = simFreqWindow.toLong * sysPeriod / 40
+      info(s"dut_freq: $cnt cykli w oknie, oczekiwane $exp")
+      assert(scala.math.abs(cnt - exp) <= 3, s"dut_freq $cnt, oczekiwane $exp")
+
+      // Po zmianie zegara harness dziala: bieg slave (polokres SCK ~163 ns = 4 cykle > 3)
+      slaveRun(e, v.width, 32)
     }
 
     scenario(v, "harness_soft_reset") { e =>

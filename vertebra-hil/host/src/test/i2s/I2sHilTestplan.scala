@@ -129,8 +129,11 @@ object I2sHilPlan {
 
     Testpoint("hw_clock_ratio_sweep", Stage.V3,
       "Zegar DUT-a slave przesuwany do granicy supportsSckHalf",
-      stimulus = Seq("dynamiczne M/D DCM_CLKGEN, ESP32 master 48 kHz"),
-      checking = Seq("znaleziona granica zgodna z supportsSckHalf (polokres SCK > txLatencyCycles)")),
+      stimulus = Seq("FPGA slave, ESP32 master: fs i slowo wariantu w slocie 32, full duplex",
+                     "24 punkty M/D DCM_CLKGEN od zegara wariantu w dol do max(0,5 f*, 10 MHz)"),
+      checking = Seq("kazdy punkt: zegar dut zmierzony (dut_freq) w 0,2 % od M/D",
+                     "punkty bezpieczne wg supportsSckHalf (z jitterem PLL ESP32): oba kierunki czyste",
+                     "ponizej f* sweep dochodzi do bledow, pierwszy blad >= 0,5 f*; M/D wariantu wraca")),
 
     Testpoint("hw_soak", Stage.V3,
       "Dlugi bieg full duplex, tylko sprzet",
@@ -215,6 +218,17 @@ class I2sHilTestplan extends HilSuite {
         if (master || !masterOk) info(s"  $dir ${l.label}: widoczne bity hasha ${l.visibleHashBits}")
       }
     }
+    // hw_clock_ratio_sweep: granica w zasiegu DCM, punkty dozwolone przez harness
+    for (c <- I2sHilVariant.all.map(I2sBenchCfg.sweep)) {
+      val fStar = I2sDcm.boundaryHz(c)
+      val pts   = I2sDcm.sweep(c.v, scala.math.max(0.5 * fStar, 10e6), sweepPoints)
+      val (m0, d0) = I2sDcm.initial(c.v)
+      assert(pts.head == ((m0, d0)) && pts.forall { case (m, d) => I2sDcm.allowed(c.v, m, d) }, c.name)
+      assert(I2sDcm.slaveOk(c, I2sDcm.hz(m0, d0)) && !I2sDcm.slaveOk(c, I2sDcm.hz(pts.last._1, pts.last._2)),
+             s"${c.name}: sweep nie przechodzi przez granice")
+      info(f"${c.name}: sweep ${pts.size} punktow, f* = ${fStar / 1e6}%.3f MHz, " +
+           f"od ${I2sDcm.hz(m0, d0) / 1e6}%.2f do ${I2sDcm.hz(pts.last._1, pts.last._2) / 1e6}%.2f MHz")
+    }
     info(if (blind.isEmpty) "wszystkie polaczenia widza czesc hasha"
          else s"tylko pole seq (przesuniecie o bit slabo wykrywalne): ${blind.mkString(", ")}")
   }
@@ -253,6 +267,17 @@ class I2sHilTestplan extends HilSuite {
     assert(i == b.fpgaInfo.get, s"rejestry identyfikacji zmienily sie od otwarcia: $i")
     val v = I2sFpgaMap.variant(i.variant.get).get
     info(s"wariant ${v.name}, build ${i.build}")
+
+    // Zegar dut po konfiguracji: pomiar HilFreqMeter kontra M/D wariantu.
+    // Ten sam pomiar sprawdza potem kazdy punkt hw_clock_ratio_sweep.
+    val (m0, d0) = I2sDcm.initial(v)
+    val st0 = I2sDcm.status(d)
+    assert(st0.locked && !st0.busy, s"DCM po konfiguracji: $st0")
+    assert(d.read(I2sHilRegs.DcmMd) == DcmProg.encode(m0, d0), "dcm_md po konfiguracji != M/D wariantu")
+    val f0 = I2sDcm.measure(d)
+    val dev0 = f0 / I2sDcm.hz(m0, d0) - 1
+    info(f"zegar dut: $m0/$d0 -> zmierzone ${f0 / 1e6}%.4f MHz (${dev0 * 100}%+.3f %% od M/D)")
+    assert(scala.math.abs(dev0) < 0.002, f"zegar dut ${f0 / 1e6}%.4f MHz, M/D daje ${I2sDcm.hz(m0, d0) / 1e6}%.4f")
 
     d.stop()
     d.cfg("role" -> "slave")                               // FPGA nie steruje SCK/WS
@@ -442,6 +467,25 @@ class I2sHilTestplan extends HilSuite {
     }
   }
 
+  /** Full duplex z FPGA slave bez asercji: liczniki obu stron po `n` ramkach
+    * nadanych przez ESP32 mastera (`sent` rosnie zawsze, takze gdy DUT nie
+    * nadaza i ESP32 nie ma locka). Dla hw_clock_ratio_sweep. */
+  def duplexSlaveStats(b : HilBench, c : I2sBenchCfg, n : Long) : (HilStat, HilStat) = {
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
+    setup(b, c, fpgaMaster = false, espTx = true, espRx = true, n)
+    fpga.start(); esp.start()
+    val t0 = System.currentTimeMillis
+    val limitMs = n * 1000 / c.espFs * 3 / 2 + 5000
+    var es = esp.stat()
+    while (es.sent < n + espInFlight) {
+      if (System.currentTimeMillis - t0 > limitMs) fail(s"ESP32 nie nadaje: $es")
+      Thread.sleep(scala.math.max(50L, (n + espInFlight - es.sent) * 1000 / c.espFs))
+      es = esp.stat()
+    }
+    fpga.stop(); esp.stop()
+    (es, fpga.stat())
+  }
+
   hwScenario("hw_full_duplex", "fpga_slave")  { b => duplex(b, benchCfg(b), fpgaMaster = false, v2Frames) }
   hwScenario("hw_full_duplex", "fpga_master") { b => duplex(b, benchCfg(b), fpgaMaster = true,  v2Frames) }
 
@@ -612,8 +656,70 @@ class I2sHilTestplan extends HilSuite {
   hwScenario("hw_soak", "fpga_slave")  { b => soak(b, fpgaMaster = false) }
   hwScenario("hw_soak", "fpga_master") { b => soak(b, fpgaMaster = true) }
 
-  unimplemented("hw_clock_ratio_sweep",
-    "wymaga dynamicznego M/D DCM_CLKGEN w harnessie (nowy bitstream), krok 2 etapu 7")
+  /** hw_clock_ratio_sweep: FPGA slave, ESP32 master z konfiguracja wariantu,
+    * zegar dut DUT-a od zegara wariantu w dol (M/D DCM_CLKGEN w biegu).
+    *
+    * Przewidywanie (I2sSlaveGenerics.supportsSckHalf): slave nadaza, gdy
+    * polokres SCK ESP32 w cyklach dut > txLatencyCycles; najgorszy polokres
+    * jest krotszy o okres PLL 160 MHz ESP32 (jitter dzielnika ulamkowego).
+    * Granica f* = txLatency / (1/(2 BCLK) - 1/160 MHz).
+    *
+    * Wymagania: kazdy punkt zmierzony w 0,2 % od M/D (DCM dziala tak, jak
+    * go programujemy); kazdy punkt, ktory model uznaje za bezpieczny, czysty
+    * w obu kierunkach; ponizej f* sweep dochodzi do bledow (granica
+    * znaleziona) i pierwszy blad nie jest dalej niz 0,5 f* (model nie jest
+    * przesadnie ostrozny). Na koncu M/D wariantu wraca. */
+  val sweepPoints = 24
+
+  hwScenario("hw_clock_ratio_sweep") { b =>
+    val c = I2sBenchCfg.sweep(variantOf(b))
+    val (esp, fpga) = (b.esp.get, b.fpga.get)
+    val (m0, d0) = I2sDcm.initial(c.v)
+    val fStar = I2sDcm.boundaryHz(c)
+    val n = scala.math.max(10000L, v2Frames / 10)
+    val points = I2sDcm.sweep(c.v, scala.math.max(0.5 * fStar, 10e6), sweepPoints)
+    info(f"${c.name}: przewidywana granica ${fStar / 1e6}%.3f MHz (txLatency ${c.v.slaveG.txLatencyCycles}), " +
+         f"${points.size} punktow od ${I2sDcm.hz(m0, d0) / 1e6}%.2f do ${I2sDcm.hz(points.last._1, points.last._2) / 1e6}%.2f MHz, $n ramek")
+
+    case class Pt(m : Int, d : Int, hz : Double, safe : Boolean, es : HilStat, fs : HilStat) {
+      def clean : Boolean = es.isClean(n / 2) && fs.isClean(n / 2)
+      def row : String = f"${hz / 1e6}%8.3f MHz ($m%3d/$d%3d) ${if (safe) "bezp." else "      "} " +
+        s"${if (clean) "ok  " else "BLAD"} ESP32 frames=${es.frames} bad=${es.bad} relocks=${es.relocks} | " +
+        s"FPGA frames=${fs.frames} bad=${fs.bad} relocks=${fs.relocks}"
+    }
+
+    val results = try {
+      points.map { case (m, d) =>
+        esp.stop(); fpga.stop()
+        val meas = I2sDcm.program(fpga, m, d)
+        val nominal = I2sDcm.hz(m, d)
+        assert(scala.math.abs(meas / nominal - 1) < 0.002,
+          f"DCM $m/$d: zmierzone ${meas / 1e6}%.4f MHz, oczekiwane ${nominal / 1e6}%.4f - programowanie DCM nie dziala jak w UG382?")
+        val (es, fs) = duplexSlaveStats(b, c, n)
+        val p = Pt(m, d, meas, I2sDcm.slaveOk(c, meas), es, fs)
+        HilProgress(s"sweep: ${p.row}")
+        p
+      }
+    } finally {
+      scala.util.Try(esp.stop()); scala.util.Try(fpga.stop())
+      scala.util.Try(I2sDcm.program(fpga, m0, d0))            // zegar wariantu z powrotem
+    }
+    results.foreach(p => info(p.row))
+
+    val unsafeFails = results.filter(p => p.safe && !p.clean)
+    assert(unsafeFails.isEmpty,
+      s"bledy w punktach, ktore supportsSckHalf uznaje za bezpieczne:\n${unsafeFails.map(_.row).mkString("\n")}")
+    val fails = results.filterNot(_.clean)
+    assert(fails.nonEmpty,
+      f"brak bledow do ${results.last.hz / 1e6}%.2f MHz: granica ponizej sweepu, supportsSckHalf bardzo ostrozny?")
+    val firstFail = fails.map(_.hz).max
+    val lastPass  = results.filter(_.clean).map(_.hz).minOption
+    info(f"granica zmierzona: miedzy ${firstFail / 1e6}%.3f a ${lastPass.fold(Double.NaN)(_ / 1e6)}%.3f MHz, " +
+         f"przewidywana ${fStar / 1e6}%.3f MHz (pierwszy blad = ${firstFail / fStar}%.2f f*)")
+    val notMonotonic = results.filter(p => p.clean && p.hz < firstFail)
+    if (notMonotonic.nonEmpty) info(s"UWAGA: czyste punkty ponizej pierwszego bledu: ${notMonotonic.map(_.row).mkString("; ")}")
+    assert(firstFail >= 0.5 * fStar, f"pierwszy blad ${firstFail / 1e6}%.3f MHz < 0,5 f*")
+  }
 
   unimplemented("hw_la_crosscheck",
     "brak analizatora stanow (vertebra-hil.md §11); SigrokI2sCheck jest gotowy (etap 3)")
