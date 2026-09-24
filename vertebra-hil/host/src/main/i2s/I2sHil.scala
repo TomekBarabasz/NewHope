@@ -45,6 +45,7 @@ object I2sHil extends HilIp {
   val fpgaSources = Seq(
     "vertebra-hil/fpga/hw",
     ":(exclude)vertebra-hil/fpga/hw/spinal/test",
+    ":(exclude)vertebra-hil/fpga/hw/gen",     // wyniki (Verilog, .bin): commit bitstreamu to nie zmiana zrodel
     "i2s/hw/spinal/main",                     // DUT-y
     "mimas_v2/hw/spinal/main")
 
