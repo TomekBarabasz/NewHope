@@ -37,7 +37,13 @@ trait HilIp {
 
 case class HilBenchOpts(esp        : Option[(String, String)],     // (port, skad)
                         fpga       : Option[(String, String)],
-                        allowStale : Boolean)
+                        allowStale : Boolean) {
+  /** Do komunikatow: skad wziely sie ustawienia (opcja suity czy env). */
+  def describe : String = {
+    def p(n : String, x : Option[(String, String)]) = x.fold(s"$n: brak")(v => s"$n=${v._1} z ${v._2}")
+    s"${p("esp", esp)}, ${p("fpga", fpga)}, allow_stale=${if (allowStale) "tak" else "nie"}"
+  }
+}
 
 object HilBenchOpts {
   val EspOpt   = "esp_com"

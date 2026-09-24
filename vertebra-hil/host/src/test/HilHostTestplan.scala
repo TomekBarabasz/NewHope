@@ -194,6 +194,7 @@ class HilHostTestplan extends TestplanSuite {
     val o = HilBenchOpts.from(Map("esp_com" -> "COM11", "allow_stale" -> "1"),
                               Map("VERTEBRA_HIL_ESP" -> "COM3", "VERTEBRA_HIL_FPGA" -> "COM12"))
     assert(o == HilBenchOpts(Some("COM11" -> "-Desp_com"), Some("COM12" -> "VERTEBRA_HIL_FPGA"), allowStale = true))
+    assert(o.describe == "esp=COM11 z -Desp_com, fpga=COM12 z VERTEBRA_HIL_FPGA, allow_stale=tak", o.describe)
 
     val dup = HilBenchOpts(Some("COM5" -> "a"), Some("com5" -> "b"), allowStale = false)
     assert(HilBench.open(I2sHil, dup, opener(Map.empty)).left.exists(_.contains("ten sam port")))

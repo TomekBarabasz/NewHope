@@ -50,11 +50,12 @@ trait HilSuite extends TestplanSuite {
         s"albo -D${HilBenchOpts.EspOpt}=... -D${HilBenchOpts.FpgaOpt}=...")
       val hb = b.get
       // Port ustawiony, plytka nie dziala: failed. Portu nie ma: canceled.
-      if (needs(HilSide.Esp))  hb.espError.foreach(e => fail(s"stanowisko: $e"))
-      if (needs(HilSide.Fpga)) hb.fpgaError.foreach(e => fail(s"stanowisko: $e"))
+      def opts = HilBenchOpts.from(configMap).describe
+      if (needs(HilSide.Esp))  hb.espError.foreach(e => fail(s"stanowisko: $e [$opts]"))
+      if (needs(HilSide.Fpga)) hb.fpgaError.foreach(e => fail(s"stanowisko: $e [$opts]"))
       if (needs(HilSide.Esp))  assume(hb.esp.isDefined,  s"scenariusz potrzebuje ESP32 (${HilBenchOpts.EspEnv})")
       if (needs(HilSide.Fpga)) assume(hb.fpga.isDefined, s"scenariusz potrzebuje FPGA (${HilBenchOpts.FpgaEnv})")
-      info(hb.describe)
+      info(s"${hb.describe} [${HilBenchOpts.from(configMap).describe}]")
       hb.warnings.foreach(w => info(s"UWAGA: $w"))
       val dir = new File(new File(logRoot, safe(suiteName)),
                          safe(if (variant.isEmpty) name else s"${name}_$variant"))
