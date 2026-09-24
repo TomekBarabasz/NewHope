@@ -464,6 +464,12 @@ Etapy 2 i 3 są niezależne i mogą iść równolegle.
 - `HilHostTestplan` przechodzi wszystkie scenariusze na atrapach.
 - Pełny bieg na wariant: 4 × ok. 21 s (V1) plus 14 biegów V2 po ok. 4 s, razem ok. 3 min.
 
+**Wyniki etapu 6 na płytce (2026-09-24): etap zakończony.** Bitstreamy wszystkich czterech wariantów (`v16_32`, `v24_32`, `v16_16`, `v32_32`, commit `af3cd91`) i firmware ESP32 zbudowane z czystych źródeł, więc `HilBench` przechodzi bez `allow_stale`. `I2sHilTestplan` na każdym wariancie: wszystko zielone, V1 kompletny (`hw_link`, `hw_param_bounds`, `hw_slv_*`, `hw_mst_*` po 10^6 ramek), V2 zrobione poza `hw_la_crosscheck` (`unimplemented`: brak analizatora, §11); `hw_padding` na `v32_32` *canceled* z założenia. Kryterium etapu 6 spełnione. Po drodze wyszły trzy rzeczy stanowiska, nie IP:
+
+- PIC Mimas V2 blokuje UART FPGA, dopóki ktoś nie odczyta portu programatora po wgraniu (§9, `programmer.py`);
+- FPGA master po `stop` dalej daje zegar (`hw_full_duplex`);
+- flaga `-dirty` liczyła się z całego repo.
+
 **Budowanie płytek pod sprawdzenie `build`.** Flaga `-dirty` (rejestr `build` FPGA, `ver` ESP32) dotyczy tylko źródeł płytki: `HilBuildInfo.sources` dla bitstreamu (ta sama lista jest w `I2sHil.fpgaSources` hosta), `esp32/` bez `test/` i `echo/` plus wektory dla firmware'u. Wcześniej liczyło się całe repo, więc wygenerowany Verilog w śledzonym `hw/gen` czy edycja kodu hosta dawały `-dirty` przy każdym buildzie. Procedura: commit zmian w źródłach płytki (gałąź dowolna), `sbt "hilFpga/runMain newhope.vertebra.hil.i2s.I2sHarnessTopVerilog"` (wszystkie warianty, w wypisie `build` bez najmłodszego bitu), ISE, `tools/programmer.py`, commit `.bin`; firmware: `idf.py build flash` (w `ver` bez `-dirty`).
 
 **Wyniki etapu 6 na płytce (2026-09-24), wariant `v16_32`.** `hw_link`, `hw_param_bounds`, `hw_slv_*` i `hw_mst_*` po 10^6 ramek: 8/8 zielonych w 1 min 26 s. `hw_mst_rx_frame` i `hw_mst_tx_frame` to pierwszy bieg ESP32 jako slave'a z obcym zegarem (FPGA z DCM, nie PLL tego samego S3): 10^6 ramek w obu kierunkach bez błędu wyrównania kanałów, więc problem z #9513 nie wystąpił w simplex 48 kHz 16/32. Zostają: V2 i pozostałe warianty (`v24_32`, `v16_16`, `v32_32`).
