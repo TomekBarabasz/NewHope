@@ -439,12 +439,20 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Wyniki etapu 3 na płytce (2026-09-24).**
+
+- `selftest`: 702 wektory i pętla wewnętrzna dla 16/32 (48 kHz), 24/32 (44,1 kHz), 16/16, 32/32 i 8/8: w każdej lock na ramce 0 i ponad 2000 ramek bez błędów.
+- ESP32 jako slave przez I2S1 jako mastera (`cfg role=slave fs=48000 w=16 slot=32 seed=0x5eed1234 loop=1`, full duplex): 1 566 240 ramek w obu kierunkach, `bad = gaps = relocks = overflow = 0`, `lock_at = 0` po obu stronach. Kryterium 10^6 ramek bez błędu wyrównania kanałów jest spełnione, a problem z #9513 w tej konfiguracji nie wystąpił. `sent − frames = 1920` to ramki w drodze (8 buforów DMA po 240), a nie zguba.
+- Zastrzeżenie: I2S1 bierze zegar z tego samego PLL co I2S0, więc to nie jest niezależny zegar. Slave'a z obcym zegarem sprawdza dopiero FPGA master (etap 5).
+- Zostaje: wyjście mastera w sigroku (brak analizatora; przeniesione na później, przed `hw_la_crosscheck` w etapie 5). Opcjonalnie: slave w simplex (`tx=0`) i pozostałe konfiguracje z `loop=1`.
+
 **Stan etapu 3 (2026-09-24).** Firmware jest w `esp32/`: `hil_cmd`, `hil_pattern`, `i2s_role` z komendami z `contract/commands.md`, `selftest` (wektory + pętla wewnętrzna) i partnerem na drugim kontrolerze (`cfg loop=1`, `contract/i2s/commands.md`). Na PC: `hil_pattern` przechodzi wszystkie 702 wektory kontraktu, rdzeń `hil_cmd` spełnia kontrakt na roli-atrapie (`make -C vertebra-hil/esp32/test`, także z ASan/UBSan), a `i2s_role.c` i transport przechodzą sprawdzenie składni na nagłówkach ESP-IDF 5.2.3. Build `idf.py` i kryterium etapu wymagają płytki i toolchainu xtensa; procedura:
 
 ```
 cd vertebra-hil/esp32 && idf.py set-target esp32s3 && idf.py build flash    # potem: CONSOLE_* w sdkconfig (§7)
 # port natywnego USB S3 (złącze "USB", nie "UART"; COM11), NIE port CH343 z logami IDF (COM10).
-# PuTTY: Serial, dowolny baud; Terminal: Local echo = Force on, Local line editing = Force on.
+# PuTTY: Serial, dowolny baud; Terminal: Local echo = Force on, Local line editing = Force on,
+#        Implicit CR in every LF = on (odpowiedzi kończy samo LF).
 # Na tym porcie po resecie nic się nie wypisuje; odpowiada dopiero na komendę.
 ver                                             -> ok proto=1 dev=esp32s3 ip=i2s build=<hash>
 selftest                                        -> # petla ... (5 linii), ok vectors=702
@@ -507,7 +515,7 @@ Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z w
 
 | Ryzyko | Skutek | Co robimy |
 | --- | --- | --- |
-| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | sprawdzenie w etapie 3 przez drugi kontroler; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
+| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | etap 3: nie wystąpiło przez 1,57 mln ramek w full duplex 48 kHz 16/32 z I2S1 jako masterem (§10), ale przy zegarze z tego samego PLL; ostatecznie rozstrzyga etap 5 z FPGA; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
 | Oba DUT-y nie mieszczą się w XC6SLX9 | wariant nie mieści się w układzie | podział wariantu na bitstreamy master i slave, ta sama mapa rejestrów |
 | ISE 14.7 na współczesnym systemie | tarcie przy budowaniu | VM albo kontener z ISE, build ze skryptu |
 | Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |
