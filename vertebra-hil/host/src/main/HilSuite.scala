@@ -11,7 +11,8 @@ import newhope.vertebra.TestplanSuite
 //    - bez stanowiska (zaden port nie ustawiony) -> assume: canceled,
 //      nie failed, wiec `sbt test` bez plytek zostaje zielony
 //    - bez plytki, ktorej scenariusz potrzebuje -> tez canceled
-//    - stanowisko ustawione, ale nie dziala -> failed z opisem
+//    - port plytki ustawiony, ale plytka nie dziala -> failed z opisem;
+//      testy, ktore jej nie potrzebuja, ida dalej
 //  Ruch na obu portach idzie do target/hil-logs/<suita>/<test>/<plytka>.log.
 // =====================================================================
 
@@ -48,6 +49,9 @@ trait HilSuite extends TestplanSuite {
         s"brak stanowiska: ustaw ${HilBenchOpts.EspEnv} / ${HilBenchOpts.FpgaEnv} " +
         s"albo -D${HilBenchOpts.EspOpt}=... -D${HilBenchOpts.FpgaOpt}=...")
       val hb = b.get
+      // Port ustawiony, plytka nie dziala: failed. Portu nie ma: canceled.
+      if (needs(HilSide.Esp))  hb.espError.foreach(e => fail(s"stanowisko: $e"))
+      if (needs(HilSide.Fpga)) hb.fpgaError.foreach(e => fail(s"stanowisko: $e"))
       if (needs(HilSide.Esp))  assume(hb.esp.isDefined,  s"scenariusz potrzebuje ESP32 (${HilBenchOpts.EspEnv})")
       if (needs(HilSide.Fpga)) assume(hb.fpga.isDefined, s"scenariusz potrzebuje FPGA (${HilBenchOpts.FpgaEnv})")
       info(hb.describe)

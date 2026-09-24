@@ -43,8 +43,9 @@ object HilHostPlan {
       "HilBench: porty, wersje, brak stanowiska",
       checking = Seq("bez portow -> Right(None) (testy hw_* canceled)",
                      "opcja suity wygrywa ze zmienna srodowiska",
-                     "ten sam port dwa razy, zly proto, zle IP, nieaktualny build -> Left; allow_stale -> ostrzezenie",
-                     "HilGit: commit nieznany, zmienione zrodla, dirty, brak hasha")),
+                     "ten sam port dwa razy -> Left",
+                     "zly proto, zle IP, nieaktualny build -> blad tej plytki, druga dziala; allow_stale -> ostrzezenie",
+                     "HilGit: commit nieznany, zmienione zrodla, brak hasha; dirty: tylko zmiany zacommitowane od builda")),
     Testpoint("host_hw_link_on_fakes", Stage.V1,
       "Cialo hw_link (I2sHilTestplan) na atrapach obu plytek",
       stimulus = Seq("I2sHilTestplan z HilBench zlozonym z FakeEsp i FakeFpga"),
@@ -197,7 +198,8 @@ class HilHostTestplan extends TestplanSuite {
     val dup = HilBenchOpts(Some("COM5" -> "a"), Some("com5" -> "b"), allowStale = false)
     assert(HilBench.open(I2sHil, dup, opener(Map.empty)).left.exists(_.contains("ten sam port")))
     val missing = HilBenchOpts(None, Some("COM9" -> "x"), allowStale = false)
-    assert(HilBench.open(I2sHil, missing, opener(Map.empty)).left.exists(_.contains("nie ma portu")))
+    val m = HilBench.open(I2sHil, missing, opener(Map.empty)).toOption.flatten.getOrElse(fail("brak stanowiska?"))
+    assert(m.fpgaError.exists(_.contains("nie ma portu")) && m.espError.isEmpty && m.fpga.isEmpty, s"${m.fpgaError}")
 
     assume(head.isDefined, "bez gita nie da sie sprawdzic build")
     val h   = head.get
@@ -225,28 +227,36 @@ class HilHostTestplan extends TestplanSuite {
       assert(e0.port.closed && f0.port.closed)
     } else info("zrodla plytek zmienione wzgledem HEAD: sciezka Fresh pominieta")
 
-    assert(run(h, hb, ipId = "I2C")._1.left.exists(_.contains("'i2c'")))
-    val (bad, e1, _) = run(h, hb, espProto = 2)
-    assert(bad.left.exists(_.contains("protokol 2")), s"$bad")
+    def benchOf(r : Either[String, Option[HilBench]]) : HilBench = r.toOption.flatten.getOrElse(fail(s"$r"))
+    val i2c = benchOf(run(h, hb, ipId = "I2C")._1)
+    assert(i2c.fpgaError.exists(_.contains("'i2c'")) && i2c.fpga.isEmpty, s"${i2c.fpgaError}")
+    val (bad0, e1, f1) = run(h, hb, espProto = 2, allow = true)
+    val bad = benchOf(bad0)
+    assert(bad.espError.exists(_.contains("protokol 2")) && bad.esp.isEmpty, s"${bad.espError}")
+    // Plytki sa niezalezne: zle ESP32 nie blokuje FPGA
+    assert(bad.fpga.isDefined && bad.fpgaError.isEmpty && !f1.port.closed)
+    bad.close()
     assert(e1.port.closed, "port zamkniety po bledzie")
 
     val (stale, _, _) = run("deadbee0", hb)
-    assert(stale.left.exists(e => e.contains("nieznany") && e.contains("allow_stale")), s"$stale")
+    assert(benchOf(stale).espError.exists(e => e.contains("nieznany") && e.contains("allow_stale")), s"$stale")
     val (allowed, _, _) = run("deadbee0", hb, allow = true)
-    assert(allowed.toOption.flatten.exists(_.warnings.exists(_.contains("dopuszczone"))), s"$allowed")
+    assert(benchOf(allowed).esp.isDefined && benchOf(allowed).warnings.exists(_.contains("dopuszczone")), s"$allowed")
 
     // HilGit wprost
     assert(HilGit.staleness("00000000", Seq("x")).isInstanceOf[HilGit.Unknown])
     assert(HilGit.staleness("xyz", Seq("x")).isInstanceOf[HilGit.Unknown])
-    assert(HilGit.staleness(h + "-dirty", Seq("vertebra-hil/contract/i2s/pattern.md")) match {
+    // dirty na HEAD: lokalne zmiany sa (zapewne) na plytce, commitow od tego czasu brak
+    assert(HilGit.staleness(h + "-dirty", Seq("vertebra-hil")) match {
       case HilGit.Unknown(w) => w.contains("niezacommitowanymi")
-      case HilGit.Stale(_)   => true                       // plik zmieniony lokalnie
-      case HilGit.Fresh      => false
+      case _                 => false
     })
     val root = scala.util.Try(scala.sys.process.Process(Seq("git", "rev-list", "--max-parents=0", "HEAD")).!!
                  .trim.split('\n').head.take(8)).toOption
     root.filter(_ != h).foreach { r =>
       assert(HilGit.staleness(r, Seq("vertebra-hil")).isInstanceOf[HilGit.Stale], s"root $r")
+      // dirty na starym commicie: zmiany zacommitowane od tego czasu to nadal Stale
+      assert(HilGit.staleness(r + "-dirty", Seq("vertebra-hil")).isInstanceOf[HilGit.Stale], s"root $r-dirty")
     }
   }
 

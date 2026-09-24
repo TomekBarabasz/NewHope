@@ -57,12 +57,17 @@ object HilBenchOpts {
   }
 }
 
+/** Plytki sa niezalezne: blad jednej (brak odpowiedzi, stary build) nie
+  * blokuje testow drugiej. `espError` / `fpgaError`: port ustawiony, ale
+  * plytka nie do uzycia - scenariusz, ktory jej potrzebuje, jest failed. */
 class HilBench(val ip : HilIp,
                val esp : Option[EspDevice],
                val fpga : Option[FpgaDevice[HilFpgaMap]],
                val espInfo : Option[HilInfo],
                val fpgaInfo : Option[HilInfo],
-               val warnings : Seq[String]) {
+               val warnings : Seq[String],
+               val espError : Option[String] = None,
+               val fpgaError : Option[String] = None) {
   def devices : Seq[HilDevice] = esp.toSeq ++ fpga.toSeq
 
   def logTo(dir : Option[File]) : Unit = devices.foreach(d =>
@@ -91,52 +96,56 @@ object HilBench {
 
   type Opener = (String, Int, Boolean) => Either[String, HilPort]
 
+  /** Otwarta i sprawdzona plytka albo opis, czemu nie. */
+  private case class Opened[D <: HilDevice](dev : D, info : HilInfo, warnings : Seq[String])
+
+  /** Otwiera port i uruchamia `check`; przy bledzie zamyka port. */
+  private def openOne[D <: HilDevice](label : String, port : String, from : String, baud : Int, idle : Boolean,
+                                      opener : Opener, portHint : String)
+                                     (mk : HilPort => D)(check : D => Either[String, Opened[D]])
+                                     : Either[String, Opened[D]] =
+    opener(port, baud, idle) match {
+      case Left(e) => Left(s"$label: $e (port z $from$portHint)")
+      case Right(p) =>
+        val d = mk(p)
+        val r = Try(check(d)).fold(e => Left(s"$label ($port z $from): ${e.getMessage}"), identity)
+        if (r.isLeft) Try(d.close())
+        r
+    }
+
   def open(ip : HilIp, opts : HilBenchOpts, opener : Opener) : Either[String, Option[HilBench]] = {
     if (opts.esp.isEmpty && opts.fpga.isEmpty) return Right(None)
     val names = (opts.esp.toSeq ++ opts.fpga.toSeq).map(_._1.toLowerCase)
     if (names.distinct.size < names.size)
       return Left(s"ten sam port dla obu plytek: ${opts.esp.get._1} (${opts.esp.get._2}, ${opts.fpga.get._2})")
 
-    val warnings = Seq.newBuilder[String]
-    var opened   = List.empty[HilDevice]
-    def cleanup[T](e : String) : Either[String, T] = { opened.foreach(d => Try(d.close())); Left(e) }
-
     val esp = opts.esp.map { case (port, from) =>
-      opener(port, 115200, true) match {           // USB-Serial-JTAG ignoruje baud
-        case Left(e) => return cleanup(s"esp32: $e (port z $from)")
-        case Right(p) =>
-          val d = new EspDevice(new HilLink(p, "esp32", text = true))
-          opened ::= d
-          val info = Try(d.sync()).fold(e => return cleanup(s"esp32 ($port z $from): ${e.getMessage}"), identity)
-          if (d.resets > 0) warnings += s"esp32: log ROM po otwarciu portu (${d.resets} linii) - uklad byl resetowany"
-          checkInfo("esp32", info, ip, ip.espSources, ip.espFlashHint, opts.allowStale) match {
-            case Left(e)  => return cleanup(e)
-            case Right(w) => warnings ++= w
-          }
-          (d, info)
+      openOne("esp32", port, from, 115200, idle = true, opener, "")(      // USB-Serial-JTAG ignoruje baud
+        p => new EspDevice(new HilLink(p, "esp32", text = true))) { d =>
+        val info  = d.sync()
+        val reset = if (d.resets > 0) Seq(s"esp32: log ROM po otwarciu portu (${d.resets} linii) - uklad byl resetowany")
+                    else Nil
+        checkInfo("esp32", info, ip, ip.espSources, ip.espFlashHint, opts.allowStale)
+          .map(w => Opened(d, info, reset ++ w))
       }
     }
 
     val fpga = opts.fpga.map { case (port, from) =>
-      opener(port, HilBridgeGenerics().baud.toInt, false) match {
-        case Left(e) => return cleanup(s"fpga: $e (port z $from; UART FPGA, nie programator)")
-        case Right(p) =>
-          val d = new FpgaDevice[HilFpgaMap](new HilLink(p, "fpga", text = false), ip.fpgaMap)
-          opened ::= d
-          d.link.drain(quietMs = 50, maxMs = 500)
-          val info = Try(d.info()).fold(e => return cleanup(s"fpga ($port z $from): ${e.getMessage}"), identity)
-          val variantOk = info.variant.flatMap(ip.fpgaMap.variantName)
-          if (variantOk.isEmpty)
-            return cleanup(f"fpga: nieznany wariant ${info.variant.getOrElse(-1L)}%08x (bitstream innego IP?)")
-          checkInfo("fpga", info, ip, ip.fpgaSources, ip.fpgaFlashHint, opts.allowStale) match {
-            case Left(e)  => return cleanup(e)
-            case Right(w) => warnings ++= w
-          }
-          (d, info)
+      openOne("fpga", port, from, HilBridgeGenerics().baud.toInt, idle = false, opener, "; UART FPGA, nie programator")(
+        p => new FpgaDevice[HilFpgaMap](new HilLink(p, "fpga", text = false), ip.fpgaMap)) { d =>
+        d.link.drain(quietMs = 50, maxMs = 500)
+        val info = d.info()
+        if (info.variant.flatMap(ip.fpgaMap.variantName).isEmpty)
+          Left(f"fpga: nieznany wariant ${info.variant.getOrElse(-1L)}%08x (bitstream innego IP?)")
+        else checkInfo("fpga", info, ip, ip.fpgaSources, ip.fpgaFlashHint, opts.allowStale)
+          .map(w => Opened(d, info, w))
       }
     }
 
-    Right(Some(new HilBench(ip, esp.map(_._1), fpga.map(_._1), esp.map(_._2), fpga.map(_._2), warnings.result())))
+    val e = esp.flatMap(_.toOption); val f = fpga.flatMap(_.toOption)
+    Right(Some(new HilBench(ip, e.map(_.dev), f.map(_.dev), e.map(_.info), f.map(_.info),
+                            e.toSeq.flatMap(_.warnings) ++ f.toSeq.flatMap(_.warnings),
+                            esp.flatMap(_.left.toOption), fpga.flatMap(_.left.toOption))))
   }
 
   /** proto i ip musza sie zgadzac; build jest porownywany z repo przez
@@ -170,8 +179,10 @@ object HilGit {
 
   private val quiet = ProcessLogger(_ => (), _ => ())
 
+  /** Wyjscie gita bez \r: na Windows linie koncza sie \r\n, a \r w
+    * komunikacie cofa kursor i terminal pokazuje tylko koniec linii. */
   private def git(args : String*) : Option[String] =
-    Try(Process("git" +: args).!!(quiet).trim).toOption
+    Try(Process("git" +: args).!!(quiet).replace("\r", "").trim).toOption
 
   lazy val toplevel : Option[String] = git("rev-parse", "--show-toplevel")
 
@@ -188,15 +199,23 @@ object HilGit {
             git("-C", top, "rev-parse", "--verify", "-q", s"${hash.take(7)}^{commit}") match {
               case None => Stale(s"commit ${hash.take(7)} nieznany w tym repo (inna galaz? git fetch?)")
               case Some(commit) =>
-                git(Seq("-C", top, "diff", "--name-only", commit, "--") ++ sources : _*) match {
+                // Build czysty: zrodla na plytce == commit, porownujemy z drzewem
+                // roboczym (lacznie z niezacommitowanymi zmianami). Build dirty:
+                // plytka ma commit + nieznane lokalne zmiany - zwykle wlasnie te
+                // z drzewa roboczego, wiec liczy sie tylko to, co zacommitowano
+                // od tego czasu; reszta to ostrzezenie (Unknown).
+                val range = if (dirty != null) Seq(commit, "HEAD") else Seq(commit)
+                git(Seq("-C", top, "diff", "--name-only") ++ range ++ Seq("--") ++ sources : _*) match {
                   case None => Unknown("git diff nie dziala")
                   case Some(out) =>
                     val changed = out.split('\n').filter(_.nonEmpty).toSeq
                     if (changed.nonEmpty)
-                      Stale(s"od ${commit.take(8)} zmienilo sie ${changed.size} plikow " +
+                      Stale(s"od ${commit.take(8)} zmienilo sie ${changed.size} plikow" +
+                            (if (dirty != null) " w commitach" else "") + " " +
                             s"(${changed.take(4).mkString(", ")}${if (changed.size > 4) ", ..." else ""})")
                     else if (dirty != null)
-                      Unknown(s"zbudowane z niezacommitowanymi zmianami na ${commit.take(8)}")
+                      Unknown(s"zbudowane z niezacommitowanymi zmianami na ${commit.take(8)} " +
+                              "(od tego commita bez zmian w zrodlach plytki)")
                     else Fresh
                 }
             }
