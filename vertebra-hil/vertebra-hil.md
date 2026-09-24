@@ -449,6 +449,22 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Stan etapu 6 (2026-09-24).** Scenariusze w `I2sHilTestplan`, uruchamiane raz na każdy wgrany wariant bitstreamu (konfiguracja wybiera się sama po rejestrze `variant`):
+
+- V1 (`-Dframes`, domyślnie 10^6): `hw_slv_rx_frame`, `hw_slv_tx_frame`, `hw_mst_rx_frame`, `hw_mst_tx_frame`. Wszystkie cztery liczy jedna funkcja (rola FPGA × kierunek): start odbiornika przed nadawcą, stop odbiornika przed nadawcą.
+- V2 (`-Dframes_v2`, domyślnie 200 000, ok. 4 s na bieg):
+  - `hw_full_duplex` w obu rolach: start slave'a przed masterem, stop najpierw mastera, żeby zegar stanął dla obu kierunków naraz;
+  - `hw_padding` (ESP32 master, słowo DUT-a w slocie 32; `v32_32`: *canceled*);
+  - `hw_lsb_across_ws` (slot = słowo);
+  - `hw_word_length_mismatch` (ESP32 24 przy DUT 16, 16 przy DUT 24/32, 8 przy slocie 16; obie role, oba kierunki);
+  - `hw_tx_underrun` (2 ramki ciszy co 64 z generatora FPGA, ESP32 liczy `gaps` ≈ frames · 2 / 64, bez `bad` i `relocks`; obie role);
+  - `hw_fs_fractional` (ESP32 master na 44,1 kHz).
+- FPGA slave przyjmuje dowolny slot ESP32 mastera, więc padding, jego brak i fs ułamkowe dają się wymusić z tym samym bitstreamem. Konfiguracje pochodne (`I2sBenchCfg.v2`) sprawdza bez sprzętu `hw_param_bounds`: checkable, zakresy ESP32, zapas półokresu SCK slave'a.
+- `HilHostTestplan` przechodzi wszystkie scenariusze na atrapach.
+- Pełny bieg na wariant: 4 × ok. 21 s (V1) plus 14 biegów V2 po ok. 4 s, razem ok. 3 min.
+
+**Wyniki etapu 6 na płytce (2026-09-24), wariant `v16_32`.** `hw_link`, `hw_param_bounds`, `hw_slv_*` i `hw_mst_*` po 10^6 ramek: 8/8 zielonych w 1 min 26 s. `hw_mst_rx_frame` i `hw_mst_tx_frame` to pierwszy bieg ESP32 jako slave'a z obcym zegarem (FPGA z DCM, nie PLL tego samego S3): 10^6 ramek w obu kierunkach bez błędu wyrównania kanałów, więc problem z #9513 nie wystąpił w simplex 48 kHz 16/32. Zostają: V2 i pozostałe warianty (`v24_32`, `v16_16`, `v32_32`).
+
 **Wyniki etapu 5 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`, wariant `v16_32` (48 kHz, 16 w 32), ESP32 master, FPGA slave: 6/6 zielonych, `hw_la_crosscheck` odłożony.
 
 - `hw_slv_rx_frame`: ESP32 nadał 1 004 160 ramek w 20 s, checker FPGA: lock, co najmniej 10^6 zgodnych ramek, `bad = gaps = relocks = overflow = 0`.
@@ -553,7 +569,7 @@ Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z w
 
 | Ryzyko | Skutek | Co robimy |
 | --- | --- | --- |
-| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | etap 3: nie wystąpiło przez 1,57 mln ramek w full duplex 48 kHz 16/32 z I2S1 jako masterem (§10), ale przy zegarze z tego samego PLL; ostatecznie rozstrzyga etap 5 z FPGA; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
+| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | etap 3: nie wystąpiło przez 1,57 mln ramek w full duplex 48 kHz 16/32 z I2S1 jako masterem (§10), ale przy zegarze z tego samego PLL; etap 6: nie wystąpiło przez 10^6 ramek w każdym kierunku (simplex) z FPGA masterem, czyli z obcym zegarem; full duplex z FPGA masterem sprawdza `hw_full_duplex`; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
 | Oba DUT-y nie mieszczą się w XC6SLX9 | wariant nie mieści się w układzie | podział wariantu na bitstreamy master i slave, ta sama mapa rejestrów |
 | ISE 14.7 na współczesnym systemie | tarcie przy budowaniu | VM albo kontener z ISE, build ze skryptu |
 | Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |

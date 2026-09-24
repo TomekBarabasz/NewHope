@@ -33,6 +33,11 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
     }
   private def espFlag(k : String) = espCfg.get(k).contains("1")
   private def fpgaMaster : Boolean = fpga.rw(0x100) == 1L
+  /** Luki generatora (gap_mode 1): z `slots` ramek na magistrali tyle niesie wzorzec. */
+  private def gap : Option[(Long, Long)] =
+    if (fpga.rw(Addr.GapMode) == 1 && fpga.rw(Addr.GapEvery) > 0 && fpga.rw(Addr.GapLen) > 0)
+      Some((fpga.rw(Addr.GapEvery), fpga.rw(Addr.GapLen))) else None
+  private def patternPart(slots : Long) : Long = gap.fold(slots) { case (e, l) => slots * e / (e + l) }
 
   // --- FPGA: liczniki przy stop -------------------------------------------
   fpga.onCtrl = {
@@ -63,7 +68,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
         }
       }
     }
-    if (espFlag("rx")) cnt("sent") = overlap(espOn, fpgaOn)  // generator FPGA za zegarem ESP32
+    if (espFlag("rx")) cnt("sent") = patternPart(overlap(espOn, fpgaOn))   // generator FPGA
   }
 
   // --- ESP32 ---------------------------------------------------------------
@@ -84,7 +89,10 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
         }
       }
     }
-    s"sent=$sent frames=$frames bad=$bad gaps=0 relocks=0 lock_at=$lockAt first_err=$err overflow=0"
+    // Z `frames` ramek na magistrali luki zajmuja l z kazdych e + l.
+    val gaps = if (frames > 0) gap.fold(0L) { case (e, l) => val g = frames * l / (e + l); frames -= g; g }
+               else 0L
+    s"sent=$sent frames=$frames bad=$bad gaps=$gaps relocks=0 lock_at=$lockAt first_err=$err overflow=0"
   }
 
   private def espDump : Seq[String] = espRxFault match {
