@@ -355,7 +355,7 @@ Orkiestrator to suita `TestplanSuite` w Scali, w podprojekcie sbt `hil` (`verteb
 | `HilSuite` | wspólna | `TestplanSuite` + `hwScenario(name, variant)(body)` |
 | `I2sHilTestplan` | per IP | plan `hw_*`, konfiguracje, scenariusze |
 
-Sprawdzenie wersji (etap 4): `proto` i IP muszą się zgadzać, inaczej suita kończy się błędem. `build` (8 cyfr hasha gita, `-dirty` albo najmłodszy bit rejestru FPGA) `HilGit` szuka w repo i porównuje źródła płytki od tego commita z drzewem roboczym (`git diff`, ścieżki w `HilIp`: dla ESP32 `esp32/` bez `test/` i `echo/` plus wektory, dla FPGA `fpga/hw` bez testów, `i2s/hw/spinal/main`, `mimas_v2`). Zmienione źródła albo nieznany commit znaczą nieaktualną płytkę: błąd z poleceniem, co przeflashować, albo tylko ostrzeżenie z `-Dallow_stale=1` / `VERTEBRA_HIL_ALLOW_STALE=1`. Build `-dirty` ma na płytce commit plus nieznane lokalne zmiany, zwykle właśnie te z drzewa roboczego, więc liczą się tylko zmiany zacommitowane od tego commita (`git diff <build> HEAD`); bez nich jest ostrzeżenie, bo pełnej zgodności nie da się stwierdzić. Brak gita też daje ostrzeżenie. Płytki sprawdzane są niezależnie: błąd jednej to *failed* tylko w scenariuszach, które jej potrzebują. Porównanie ze źródłami, a nie z HEAD, jest celowe: commit w kodzie hosta nie wymaga przeflashowania płytek.
+Sprawdzenie wersji (etap 4): `proto` i IP muszą się zgadzać, inaczej suita kończy się błędem. `build` (8 cyfr hasha gita, `-dirty` albo najmłodszy bit rejestru FPGA) `HilGit` szuka w repo i porównuje źródła płytki od tego commita z drzewem roboczym (`git diff`, ścieżki w `HilIp`: dla ESP32 `esp32/` bez `test/` i `echo/` plus wektory, dla FPGA `fpga/hw` bez testów i bez `hw/gen` (Verilog i `.bin` to wyniki budowania, commit bitstreamu nie czyni go nieaktualnym), `i2s/hw/spinal/main`, `mimas_v2`). Zmienione źródła albo nieznany commit znaczą nieaktualną płytkę: błąd z poleceniem, co przeflashować, albo tylko ostrzeżenie z `-Dallow_stale=1` / `VERTEBRA_HIL_ALLOW_STALE=1`. Build `-dirty` ma na płytce commit plus nieznane lokalne zmiany, zwykle właśnie te z drzewa roboczego, więc liczą się tylko zmiany zacommitowane od tego commita (`git diff <build> HEAD`); bez nich jest ostrzeżenie, bo pełnej zgodności nie da się stwierdzić. Brak gita też daje ostrzeżenie. Płytki sprawdzane są niezależnie: błąd jednej to *failed* tylko w scenariuszach, które jej potrzebują. Porównanie ze źródłami, a nie z HEAD, jest celowe: commit w kodzie hosta nie wymaga przeflashowania płytek.
 
 Dzięki firmware PIC z osobnym portem programowania (§6) `HilBench` może sam utrzymywać płytkę w zgodności z kodem: gdy hash builda odczytany z rejestrów różni się od hasha świeżo zbudowanego `.bin`, wgrywa go przez XMODEM, czeka na restart FPGA i ponawia `ver`. Porty: `VERTEBRA_HIL_FPGA_PROG` (programowanie) i `VERTEBRA_HIL_FPGA` (UART). Etap 4 tego nie robi: przy nieaktualnym bitstreamie `HilBench` kończy się komunikatem, a samo wgrywanie przez XMODEM dochodzi razem z budowaniem `.bin` ze skryptu.
 
@@ -421,6 +421,7 @@ Zasady:
 - **Zmiana roli bez konfliktu.** Przy przełączaniu master/slave orkiestrator najpierw ustawia obie strony w `stop` z SCK/WS w wysokiej impedancji, dopiero potem konfiguruje nową rolę. Rezystory 100 Ω na SCK i WS ograniczają prąd, gdyby doszło do krótkiego konfliktu, i tłumią odbicia.
 - **Kable krótkie**, do ok. 15 cm, taśma z masą między liniami sygnałowymi. Podwójne zbocze na SCK od dzwonienia to błąd stanowiska, nie IP; `hw_la_crosscheck` ma to wykluczyć.
 - **Zasilanie** obu płytek z jednego zasilanego huba USB, żeby nie mieć pętli masy przez dwa porty PC.
+- **Po wgraniu bitstreamu port programatora trzeba odczytać.** PIC (firmware jimmo) po XMODEM weryfikuje flash i wypisuje wynik na port programatora. Dopóki nikt go nie odczyta, PIC wisi na zapisie do USB, a port UART FPGA nie przyjmuje bajtów (host: „zapis ... nie powiódł się w 2000 ms”). `tools/programmer.py` czyta ten port aż do znaku zachęty `mimas>`; po ręcznym programowaniu wystarczy otworzyć port programatora i odczytać, co czeka, albo odłączyć USB. Uwaga: port programatora wykonuje komendy po CR (np. `e` kasuje flash), więc nie wysyłamy na niego ramek mostu. Na stanowisku: COM13 programator, COM12 UART FPGA.
 
 ### Gdzie co działa
 
@@ -448,6 +449,30 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 | 7 | I2S V3 | reset DUT-a w losowym momencie, `hw_clock_ratio_sweep` (dynamiczne M/D DCM\_CLKGEN), `hw_soak` | 10 min soak na każdą rolę bez błędu; znaleziona granica zegara slave'a zgodna z `supportsSckHalf` |
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
+
+**Stan etapu 6 (2026-09-24).** Scenariusze w `I2sHilTestplan`, uruchamiane raz na każdy wgrany wariant bitstreamu (konfiguracja wybiera się sama po rejestrze `variant`):
+
+- V1 (`-Dframes`, domyślnie 10^6): `hw_slv_rx_frame`, `hw_slv_tx_frame`, `hw_mst_rx_frame`, `hw_mst_tx_frame`. Wszystkie cztery liczy jedna funkcja (rola FPGA × kierunek): start odbiornika przed nadawcą, stop odbiornika przed nadawcą.
+- V2 (`-Dframes_v2`, domyślnie 200 000, ok. 4 s na bieg):
+  - `hw_full_duplex` w obu rolach: start slave'a przed masterem; liczniki ESP32 czytane jeszcze w biegu, potem stop FPGA (migawka), na końcu ESP32. Stop każdej strony robi ciszę dla checkera drugiej, a FPGA master po `stop` dalej daje SCK/WS (`clkOe` zależy od roli, nie od biegu) z wyłączonym generatorem: pierwsza wersja (stop mastera najpierw) dała na `v32_32` 260 ramek ciszy po stronie ESP32;
+  - `hw_padding` (ESP32 master, słowo DUT-a w slocie 32; `v32_32`: *canceled*);
+  - `hw_lsb_across_ws` (slot = słowo);
+  - `hw_word_length_mismatch` (ESP32 24 przy DUT 16, 16 przy DUT 24/32, 8 przy slocie 16; obie role, oba kierunki);
+  - `hw_tx_underrun` (2 ramki ciszy co 64 z generatora FPGA, ESP32 liczy `gaps` ≈ frames · 2 / 64, bez `bad` i `relocks`; obie role);
+  - `hw_fs_fractional` (ESP32 master na 44,1 kHz).
+- FPGA slave przyjmuje dowolny slot ESP32 mastera, więc padding, jego brak i fs ułamkowe dają się wymusić z tym samym bitstreamem. Konfiguracje pochodne (`I2sBenchCfg.v2`) sprawdza bez sprzętu `hw_param_bounds`: checkable, zakresy ESP32, zapas półokresu SCK slave'a.
+- `HilHostTestplan` przechodzi wszystkie scenariusze na atrapach.
+- Pełny bieg na wariant: 4 × ok. 21 s (V1) plus 14 biegów V2 po ok. 4 s, razem ok. 3 min.
+
+**Wyniki etapu 6 na płytce (2026-09-24): etap zakończony.** Bitstreamy wszystkich czterech wariantów (`v16_32`, `v24_32`, `v16_16`, `v32_32`, commit `af3cd91`) i firmware ESP32 zbudowane z czystych źródeł, więc `HilBench` przechodzi bez `allow_stale`. `I2sHilTestplan` na każdym wariancie: wszystko zielone, V1 kompletny (`hw_link`, `hw_param_bounds`, `hw_slv_*`, `hw_mst_*` po 10^6 ramek), V2 zrobione poza `hw_la_crosscheck` (`unimplemented`: brak analizatora, §11); `hw_padding` na `v32_32` *canceled* z założenia. Kryterium etapu 6 spełnione. Po drodze wyszły trzy rzeczy stanowiska, nie IP:
+
+- PIC Mimas V2 blokuje UART FPGA, dopóki ktoś nie odczyta portu programatora po wgraniu (§9, `programmer.py`);
+- FPGA master po `stop` dalej daje zegar (`hw_full_duplex`);
+- flaga `-dirty` liczyła się z całego repo.
+
+**Budowanie płytek pod sprawdzenie `build`.** Flaga `-dirty` (rejestr `build` FPGA, `ver` ESP32) dotyczy tylko źródeł płytki: `HilBuildInfo.sources` dla bitstreamu (ta sama lista jest w `I2sHil.fpgaSources` hosta), `esp32/` bez `test/` i `echo/` plus wektory dla firmware'u. Wcześniej liczyło się całe repo, więc wygenerowany Verilog w śledzonym `hw/gen` czy edycja kodu hosta dawały `-dirty` przy każdym buildzie. Procedura: commit zmian w źródłach płytki (gałąź dowolna), `sbt "hilFpga/runMain newhope.vertebra.hil.i2s.I2sHarnessTopVerilog"` (wszystkie warianty, w wypisie `build` bez najmłodszego bitu), ISE, `tools/programmer.py`, commit `.bin`; firmware: `idf.py build flash` (w `ver` bez `-dirty`).
+
+**Wyniki etapu 6 na płytce (2026-09-24), wariant `v16_32`.** `hw_link`, `hw_param_bounds`, `hw_slv_*` i `hw_mst_*` po 10^6 ramek: 8/8 zielonych w 1 min 26 s. `hw_mst_rx_frame` i `hw_mst_tx_frame` to pierwszy bieg ESP32 jako slave'a z obcym zegarem (FPGA z DCM, nie PLL tego samego S3): 10^6 ramek w obu kierunkach bez błędu wyrównania kanałów, więc problem z #9513 nie wystąpił w simplex 48 kHz 16/32. Zostają: V2 i pozostałe warianty (`v24_32`, `v16_16`, `v32_32`).
 
 **Wyniki etapu 5 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`, wariant `v16_32` (48 kHz, 16 w 32), ESP32 master, FPGA slave: 6/6 zielonych, `hw_la_crosscheck` odłożony.
 
@@ -553,7 +578,7 @@ Największe ryzyko dotyczy wyroczni: ESP32-S3 jako slave może mieć problem z w
 
 | Ryzyko | Skutek | Co robimy |
 | --- | --- | --- |
-| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | etap 3: nie wystąpiło przez 1,57 mln ramek w full duplex 48 kHz 16/32 z I2S1 jako masterem (§10), ale przy zegarze z tego samego PLL; ostatecznie rozstrzyga etap 5 z FPGA; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
+| Wyrównanie kanałów S3 w trybie slave ([#9513](https://github.com/espressif/esp-idf/issues/9513)) | fałszywe błędy przy FPGA master | etap 3: nie wystąpiło przez 1,57 mln ramek w full duplex 48 kHz 16/32 z I2S1 jako masterem (§10), ale przy zegarze z tego samego PLL; etap 6: nie wystąpiło przez 10^6 ramek w każdym kierunku (simplex) z FPGA masterem, czyli z obcym zegarem; full duplex z FPGA masterem sprawdza `hw_full_duplex`; awaryjnie ESP tylko jako master, a rolę slave'a przejmuje inny układ z I2S w krzemie |
 | Oba DUT-y nie mieszczą się w XC6SLX9 | wariant nie mieści się w układzie | podział wariantu na bitstreamy master i slave, ta sama mapa rejestrów |
 | ISE 14.7 na współczesnym systemie | tarcie przy budowaniu | VM albo kontener z ISE, build ze skryptu |
 | Niestandardowy firmware PIC (jimmo) | na płytce z fabrycznym firmware: 19200 bodów i ręczny przełącznik SW7 | baud jest generykiem; HilBench rozpoznaje firmware po liczbie portów i odmawia pracy na fabrycznym z jasnym komunikatem |

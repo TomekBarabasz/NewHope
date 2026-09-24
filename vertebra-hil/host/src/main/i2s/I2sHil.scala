@@ -42,11 +42,8 @@ object I2sHil extends HilIp {
     ":(exclude)vertebra-hil/esp32/test",      // testy na PC
     ":(exclude)vertebra-hil/esp32/echo",      // osobny projekt z etapu 0
     "vertebra-hil/contract/i2s/vectors")      // wbudowane przez EMBED_TXTFILES
-  val fpgaSources = Seq(
-    "vertebra-hil/fpga/hw",
-    ":(exclude)vertebra-hil/fpga/hw/spinal/test",
-    "i2s/hw/spinal/main",                     // DUT-y
-    "mimas_v2/hw/spinal/main")
+  /** Ta sama lista, z ktorej harness liczy flage dirty w rejestrze build. */
+  val fpgaSources = HilBuildInfo.sources
 
   val espFlashHint  = "Przeflashuj: cd vertebra-hil/esp32 && idf.py build flash"
   val fpgaFlashHint = "Wgraj bitstream: I2sHarnessTop_<wariant> -> ISE -> .bin, tools/programmer.py"
@@ -82,4 +79,31 @@ object I2sBenchCfg {
     I2sBenchCfg("48k_32in32",     I2sHilVariant.v32_32, 48000, 32, 32),
     I2sBenchCfg("48k_esp24_dut16", I2sHilVariant.v16_32, 48000, 24, 32),
     I2sBenchCfg("44k1_esp16_dut24", I2sHilVariant.v24_32, 44100, 16, 32))
+
+  // Konfiguracje V2 pochodne od wariantu (I2sHilTestplan). FPGA slave
+  // przyjmie dowolny slot ESP32 mastera, wiec padding, jego brak i fs
+  // ulamkowe da sie wymusic z tym samym bitstreamem.
+
+  /** Slowo DUT-a w slocie 32; None dla slowa 32 bity (brak paddingu). */
+  def padding(v : I2sHilVariant) : Option[I2sBenchCfg] =
+    if (v.width < 32) Some(I2sBenchCfg(s"pad_${v.width}in32", v, v.fs, v.width, 32)) else None
+
+  /** Slot rowny slowu. */
+  def lsbAcrossWs(v : I2sHilVariant) : I2sBenchCfg =
+    I2sBenchCfg(s"lsb_${v.width}in${v.width}", v, v.fs, v.width, v.width)
+
+  /** ESP32 z inna szerokoscia niz DUT, slot wariantu (FPGA master go narzuca);
+    * przy slocie 16 jedyna inna szerokosc ESP32 to 8. */
+  def mismatch(v : I2sHilVariant) : I2sBenchCfg = {
+    val other = if (v.slotWidth == 16) 8 else if (v.width == 16) 24 else 16
+    I2sBenchCfg(s"esp${other}_dut${v.width}", v, v.fs, other, v.slotWidth)
+  }
+
+  /** ESP32 master na 44,1 kHz (dzielnik ulamkowy PLL 160 MHz). */
+  def fsFractional(v : I2sHilVariant) : I2sBenchCfg =
+    I2sBenchCfg(s"44k1_${v.width}in${v.slotWidth}", v, 44100, v.width, v.slotWidth)
+
+  /** Wszystkie biegi V2 wariantu: (konfiguracja, czy FPGA moze byc masterem). */
+  def v2(v : I2sHilVariant) : Seq[(I2sBenchCfg, Boolean)] =
+    padding(v).map(_ -> false).toSeq ++ Seq(lsbAcrossWs(v) -> false, mismatch(v) -> true, fsFractional(v) -> false)
 }

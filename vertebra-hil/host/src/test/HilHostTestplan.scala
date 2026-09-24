@@ -296,7 +296,7 @@ class HilHostTestplan extends TestplanSuite {
     val suite = new I2sHilTestplan { override def bench = b }
     val events = scala.collection.mutable.ArrayBuffer[Event]()
     val rep = new Reporter { def apply(ev : Event) : Unit = synchronized { events += ev } }
-    suite.run(None, Args(rep, configMap = ConfigMap("frames" -> "5000")))
+    suite.run(None, Args(rep, configMap = ConfigMap("frames" -> "5000", "frames_v2" -> "5000")))
     b.foreach(_.foreach(_.close()))
     events.collect {
       case x : TestSucceeded => x.testName -> "ok"
@@ -310,7 +310,11 @@ class HilHostTestplan extends TestplanSuite {
 
   testpoint("host_hw_on_fakes") {
     val clean = runOnFakes(_ => ())
-    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame")) {
+    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame",
+                  "hw_mst_rx_frame", "hw_mst_tx_frame",
+                  "hw_full_duplex (fpga_slave)", "hw_full_duplex (fpga_master)", "hw_padding", "hw_lsb_across_ws",
+                  "hw_word_length_mismatch", "hw_tx_underrun (fpga_slave)", "hw_tx_underrun (fpga_master)",
+                  "hw_fs_fractional")) {
       info(s"$n: ${result(clean, n)}")
       assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
     }
@@ -325,6 +329,8 @@ class HilHostTestplan extends TestplanSuite {
     info(s"hw_slv_tx_frame z bledem: $tx")
     assert(rx.startsWith("FAILED") && rx.contains("ramka 150: przeklamane bity") && rx.contains("R xor=00000001"), rx)
     assert(tx.startsWith("FAILED") && tx.contains("ramka 200: kanaly zamienione") && tx.contains("idx 200"), tx)
+    for (n <- Seq("hw_mst_rx_frame", "hw_mst_tx_frame"))
+      assert(result(faulty, n).startsWith("FAILED"), s"$n: ${result(faulty, n)}")
   }
 
 }

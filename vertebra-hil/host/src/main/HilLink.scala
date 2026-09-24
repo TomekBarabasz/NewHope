@@ -65,7 +65,9 @@ class HilLink(val port : HilPort, val label : String, val text : Boolean) {
     logBytes(">", b)
     if (!port.write(b))
       throw new HilLinkError(s"$label: zapis do ${port.name} nie powiodl sie w ${HilSerial.WriteTimeoutMs} ms " +
-        "(plytka nie odbiera: ESP32 w trybie pobierania po flash? RST albo odlaczenie zasilania)")
+        "(plytka nie odbiera. ESP32: tryb pobierania po flash, RST albo odlaczenie zasilania. " +
+        "Mimas V2: PIC czeka, az ktos odczyta port programatora po wgraniu bitstreamu - " +
+        "tools/programmer.py robi to sam, inaczej otworz i odczytaj ten port albo odlacz USB)")
   }
 
   def send(s : String) : Unit = send(s.getBytes("US-ASCII"))
