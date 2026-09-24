@@ -568,6 +568,8 @@ Domena `dut` ma duży zapas we wszystkich wariantach. Domena `sys` jest ciasna i
 
 Przy I2C bez zmian powinny przejść: `HilLink`, `HilDevice`, `HilBench`, `HilSuite`, `hil_cmd`, most UART, rejestry rdzenia, liczniki, bufor przechwytywania i wstrzykiwanie resetu. Nowe będą: wzorzec transakcji zamiast ramek, `I2cHarness`, `main/i2c_role.c`, `I2cHilTestplan` oraz elektryka open-drain (pull-upy, czasy narastania, clock stretching przez ESP32), czyli to, czego symulacja nie ma wcale.
 
+Plan: `vertebra-hil-i2c.md`.
+
 Dopiero wtedy decydujemy o refaktorze: co z generatorów, checkerów i wzorca da się wspólnie opisać. Miarą sukcesu jest dodanie I2C bez zmian w części wspólnej poza poprawkami błędów; każda wymuszona zmiana to wpis na liście refaktorów.
 
 Po etapie 5 `TESTING-STRATEGY.md` dostaje sekcję o testach sprzętowych i wiersz `I2sHilTestplan` w tabeli z §8.
