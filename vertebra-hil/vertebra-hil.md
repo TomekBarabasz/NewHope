@@ -443,7 +443,9 @@ Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
 ```
 cd vertebra-hil/esp32 && idf.py set-target esp32s3 && idf.py build flash    # potem: CONSOLE_* w sdkconfig (§7)
-# port natywnego USB (COM11), linie:
+# port natywnego USB S3 (złącze "USB", nie "UART"; COM11), NIE port CH343 z logami IDF (COM10).
+# PuTTY: Serial, dowolny baud; Terminal: Local echo = Force on, Local line editing = Force on.
+# Na tym porcie po resecie nic się nie wypisuje; odpowiada dopiero na komendę.
 ver                                             -> ok proto=1 dev=esp32s3 ip=i2s build=<hash>
 selftest                                        -> # petla ... (5 linii), ok vectors=702
 # master do sigroka (D0 = GPIO4 SCK, D1 = GPIO5 WS, D2 = GPIO6 DOUT), dla 16/32, 24/32, 16/16, 32/32:

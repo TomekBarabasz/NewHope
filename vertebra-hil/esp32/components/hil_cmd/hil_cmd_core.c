@@ -348,3 +348,27 @@ void hil_cmd_line_too_long(void)
 {
     ERR(HIL_ERR_UNKNOWN_CMD, "linia dluzsza niz %d znakow", HIL_LINE_MAX);
 }
+
+void hil_cmd_feed(const char *data, size_t n)
+{
+    static char line[HIL_LINE_MAX + 1];
+    static size_t len;
+    static bool overflow;
+    for (size_t i = 0; i < n; i++) {
+        char ch = data[i];
+        if (ch == '\n' || ch == '\r') {
+            if (overflow) {
+                hil_cmd_line_too_long();
+            } else {
+                line[len] = '\0';
+                hil_cmd_line(line);
+            }
+            len = 0;
+            overflow = false;
+        } else if (len < HIL_LINE_MAX) {
+            line[len++] = ch;
+        } else {
+            overflow = true;
+        }
+    }
+}

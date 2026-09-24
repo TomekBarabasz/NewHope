@@ -42,28 +42,11 @@ static void usj_write(const char *s, size_t n)
 static void cmd_task(void *arg)
 {
     (void)arg;
-    static char line[HIL_LINE_MAX + 1];
-    size_t len = 0;
-    bool overflow = false;
     uint8_t buf[64];
     for (;;) {
         int n = usb_serial_jtag_read_bytes(buf, sizeof(buf), portMAX_DELAY);
-        for (int i = 0; i < n; i++) {
-            char ch = (char)buf[i];
-            if (ch == '\n') {
-                if (overflow) {
-                    hil_cmd_line_too_long();
-                } else {
-                    line[len] = '\0';
-                    hil_cmd_line(line);
-                }
-                len = 0;
-                overflow = false;
-            } else if (len < HIL_LINE_MAX) {
-                line[len++] = ch;
-            } else {
-                overflow = true;
-            }
+        if (n > 0) {
+            hil_cmd_feed((const char *)buf, (size_t)n);
         }
     }
 }

@@ -83,6 +83,11 @@ void hil_cmd_line(char *line);
 /* Linia dluzsza niz HIL_LINE_MAX: odpowiedz bledem zamiast wykonania. */
 void hil_cmd_line_too_long(void);
 
+/* Bajty z transportu: sklada linie i wykonuje je przez hil_cmd_line.
+ * Linie konczy '\n' albo '\r' (terminal typu PuTTY wysyla na Enter sam
+ * '\r'); "\r\n" daje linie i pusta linie, ktora nic nie robi. */
+void hil_cmd_feed(const char *data, size_t n);
+
 /* ---- transport (hil_cmd_usj.c, ESP-IDF) ---- */
 
 /* Instaluje USB-Serial-JTAG i uruchamia task komend. Wywolac raz. */

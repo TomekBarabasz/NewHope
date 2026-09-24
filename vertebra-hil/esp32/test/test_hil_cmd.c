@@ -150,6 +150,35 @@ int main(void)
         failures++;
     }
 
+    /* hil_cmd_feed: PuTTY (sam CR), LF, CRLF, linia w kawalkach, za dluga linia */
+    static const struct { const char *in; const char *exp; } feeds[] = {
+        { "ver\r", "ok proto=1 dev=esp32s3 ip=i2s build=bef20891\n" },
+        { "ver\n", "ok proto=1 dev=esp32s3 ip=i2s build=bef20891\n" },
+        { "ver\r\n", "ok proto=1 dev=esp32s3 ip=i2s build=bef20891\n" },
+        { "st", "" },
+        { "at\r", "ok sent=1 frames=2\n" },
+        { "\r\n\n", "" },
+        { "ver\r\nfoo\r\n", "ok proto=1 dev=esp32s3 ip=i2s build=bef20891\nerr 1 nieznana komenda 'foo'\n" },
+    };
+    for (size_t i = 0; i < sizeof(feeds) / sizeof(feeds[0]); i++) {
+        out_len = 0;
+        out[0] = '\0';
+        hil_cmd_feed(feeds[i].in, strlen(feeds[i].in));
+        if (strcmp(out, feeds[i].exp) != 0) {
+            printf("FAIL feed %zu\n  got: %s  exp: %s\n", i, out, feeds[i].exp);
+            failures++;
+        }
+    }
+    char longl[400];
+    memset(longl, 'x', sizeof(longl));
+    out_len = 0;
+    hil_cmd_feed(longl, sizeof(longl));
+    hil_cmd_feed("\rver\r", 5);
+    if (strcmp(out, "err 1 linia dluzsza niz 255 znakow\nok proto=1 dev=esp32s3 ip=i2s build=bef20891\n") != 0) {
+        printf("FAIL feed za dluga linia: %s", out);
+        failures++;
+    }
+
     if (failures) {
         printf("%d bledow\n", failures);
         return 1;
