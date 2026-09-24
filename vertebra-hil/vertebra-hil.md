@@ -449,6 +449,13 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Wyniki etapu 5 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`, wariant `v16_32` (48 kHz, 16 w 32), ESP32 master, FPGA slave: 6/6 zielonych, `hw_la_crosscheck` odłożony.
+
+- `hw_slv_rx_frame`: ESP32 nadał 1 004 160 ramek w 20 s, checker FPGA: lock, co najmniej 10^6 zgodnych ramek, `bad = gaps = relocks = overflow = 0`.
+- `hw_slv_tx_frame`: checker ESP32 odebrał 1 000 922 ramki od DUT-a slave w 20 s, bez błędów; `sent` FPGA − `frames` ESP32 w granicy buforów DMA.
+- Kryterium 10^6 ramek bez błędu jest spełnione w obu kierunkach. `hw_la_crosscheck` zostaje otwarty do czasu analizatora (§11).
+- Po drodze: host potrafił zawisnąć bez limitu na zapisie do portu, którego druga strona nie odbiera (jSerialComm na Windows nie ma domyślnie timeoutu zapisu). Zapis ma teraz timeout 2 s, postęp idzie na bieżąco liniami `[hil ...]`, a watchdog po 60 s bez postępu wypisuje stos wątku testu. Przyczyna samego zawieszenia nie jest pewna (stan ESP32 po flashowaniu albo port zajęty przez PuTTY); po resecie płytki nie wróciła.
+
 **Stan etapu 5 (2026-09-24).** `hw_slv_rx_frame` (ESP32 master nadaje, FPGA slave sprawdza) i `hw_slv_tx_frame` (FPGA slave nadaje, ESP32 master sprawdza, simplex) w `I2sHilTestplan`, na jednej konfiguracji: tej z `I2sBenchCfg`, która pasuje do wgranego wariantu (dla `v16_32`: 48 kHz, 16 w 32). Kolejność z §3: obie strony w `stop`, `cfg`, start odbiornika przed zegarem, a na końcu stop odbiornika przed nadawcą, żeby migawka była z ciągłego strumienia, a nie z ciszy przy wyłączaniu. Postęp liczy `stat` ESP32 w trakcie biegu (liczniki FPGA są tylko w migawce). Liczba ramek: `-Dframes` (domyślnie 10^6, ok. 21 s na test). Przy błędzie test robi `dump` z odbiornika i dekoduje go wzorcem (`I2sDiag`): „ramka 150: przekłamane bity: R xor=00000001”, „kanały zamienione”, „zgubione k ramek”, „zdublowana ramka”, „przesunięcie o bit”. `HilHostTestplan` przechodzi oba scenariusze na atrapach (`FakeI2sBus`) z czystym biegiem i z wstrzykniętymi błędami. `hw_la_crosscheck` jest w planie jako V2 `unimplemented`: brak analizatora (§11). Kryterium etapu wymaga płytek zbudowanych z czystego drzewa (etap 4) i:
 
 ```
