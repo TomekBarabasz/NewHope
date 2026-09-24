@@ -1,0 +1,41 @@
+# vertebra-hil: piny I2S na ESP32-S3-DevKitC-1 N16R8 (vertebra-hil.md §9).
+# Zajete na tej plytce: strapping 0, 3, 45, 46; USB 19, 20; UART0 43, 44;
+# flash 26-32; PSRAM oktalny 33-37; dioda RGB 38 albo 48 (wersja plytki).
+menu "vertebra-hil"
+
+    config HIL_PIN_SCK
+        int "SCK na magistrali (do FPGA P7-1)"
+        range 0 48
+        default 4
+    config HIL_PIN_WS
+        int "WS na magistrali (do FPGA P7-2)"
+        range 0 48
+        default 5
+    config HIL_PIN_DOUT
+        int "SD_E2F: DOUT ESP32 (do FPGA P7-3)"
+        range 0 48
+        default 6
+    config HIL_PIN_DIN
+        int "SD_F2E: DIN ESP32 (od FPGA P7-4)"
+        range 0 48
+        default 7
+
+    comment "Piny petli wewnetrznej (selftest, cfg loop=1): nic do nich nie podlaczac"
+    config HIL_PIN_LOOP_SCK
+        int "SCK petli"
+        range 0 48
+        default 15
+    config HIL_PIN_LOOP_WS
+        int "WS petli"
+        range 0 48
+        default 16
+    config HIL_PIN_LOOP_A
+        int "dane petli A (DOUT roli glownej)"
+        range 0 48
+        default 17
+    config HIL_PIN_LOOP_B
+        int "dane petli B (DIN roli glownej)"
+        range 0 48
+        default 18
+
+endmenu

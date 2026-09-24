@@ -11,4 +11,4 @@ vertebra-hil/fpga/build
 vertebra-hil/esp32/build
 vertebra-hil/esp32/sdkconfig
 vertebra-hil/esp32/*/build
-
+vertebra-hil/esp32/sdkconfig.old

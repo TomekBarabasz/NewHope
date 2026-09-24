@@ -1,0 +1,12 @@
+# vertebra-hil: ESP32-S3-DevKitC-1 N16R8 (16 MB flash, 8 MB PSRAM oktalny).
+# Plik lezy w katalogu projektu (esp32/), bo tylko stad czyta go idf.py.
+# Echo z etapu 0 bylo osobnym projektem w esp32/echo/ bez wlasnego pliku
+# defaults, dlatego sdkconfig odtwarzal sie tam z konsola na USB (§11).
+CONFIG_IDF_TARGET="esp32s3"
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_FREERTOS_HZ=1000
+
+# Konsola IDF tylko na UART0 (CH343), USB-Serial-JTAG nalezy do hil_cmd.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

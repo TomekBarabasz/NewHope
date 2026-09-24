@@ -114,11 +114,14 @@ NewHope/
       hw/build/      (gitignore)    .bit / .bin
     host/                           sbt: hil (srcLayout)
       src/main/                     EchoProbe (etap 0); HilLink, HilDevice, HilBench, HilSuite...
+      src/main/i2s/                 SigrokI2sCheck (etap 3)
       src/test/i2s/                 I2sHilTestplan
     esp32/                          ESP-IDF (CMake), poza sbt
       CMakeLists.txt, sdkconfig.defaults
-      main/                         etap 0: echo USB-Serial-JTAG; potem i2s_role.c
+      main/                         main.c, i2s_role.c, Kconfig.projbuild (piny) (etap 3)
       components/hil_cmd, hil_pattern
+      test/                         Makefile: hil_pattern i rdzen hil_cmd na PC, gcc (etap 3)
+      echo/                         etap 0: echo USB-Serial-JTAG, osobny projekt
     tools/                          flashowanie Mimas V2 (XMODEM), notatki o VM z ISE
 ```
 
@@ -313,9 +316,11 @@ ESP-IDF 5.x i nowy driver `i2s_std` w trybie Philips. Firmware nie zna scenarius
 
 | Moduł | Wspólny / per IP | Opis |
 | --- | --- | --- |
-| `components/hil_cmd` | wspólny | USB-Serial-JTAG (natywne USB S3, sprzętowy CDC-ACM), parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami |
-| `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4; wektory z `contract/i2s/vectors/` wbudowane przez `EMBED_FILES` |
-| `main/i2s_role.c` | per IP | konfiguracja kanału z `cfg`, task TX (wzorzec → `i2s_channel_write`), task RX (`i2s_channel_read` → checker) |
+| `components/hil_cmd` | wspólny | `hil_cmd_core.c`: parser linii, tablica komend, rejestr kluczy `cfg` z typami i zakresami, stan stop/bieg (bez ESP-IDF); `hil_cmd_usj.c`: USB-Serial-JTAG (natywne USB S3, sprzętowy CDC-ACM) |
+| `components/hil_pattern` | wspólny dla I2S | wzorzec, `transfer()`, checker z §4 z capture jak `HilCapture`, pakowanie ramki w bufor DMA; wektory z `contract/i2s/vectors/` wbudowane przez `EMBED_TXTFILES`; bez ESP-IDF |
+| `main/i2s_role.c` | per IP | konfiguracja kanału z `cfg`, task TX (wzorzec → `i2s_channel_write`), task RX (`i2s_channel_read` → checker), `selftest`, partner na I2S1 (`loop=1`) |
+
+Części bez ESP-IDF (`hil_pattern`, rdzeń `hil_cmd`) kompilują się też gccem na PC: `make -C vertebra-hil/esp32/test` sprawdza wzorzec na tych samych wektorach co `selftest` i rdzeń protokołu na roli-atrapie, bez płytki.
 
 Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start` / `stop` / `stat`. Dla I2C dojdzie `main/i2c_role.c`, a `hil_cmd` zostaje bez zmian.
 
@@ -324,10 +329,13 @@ Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start`
 - **Pakowanie próbek w buforze DMA** zależy od `data_bit_width` (zwłaszcza 24 bity). Nie zgadujemy: `selftest` w pętli wewnętrznej i logic analyzer rozstrzygają, co faktycznie wychodzi na linię.
 - **Początek biegu**: pierwsze ramki TX to zera z pustego DMA, pierwsze bufory RX to śmieci. Oba przypadki obsługuje lock checkera, a nie firmware.
 - **Przepustowość checkera**: najgorszy przypadek to 96 kHz × 2 × 32 bity, około 192 tys. słów/s. Jeden xorshift i porównanie na słowo przy 240 MHz to mały ułamek CPU. Przepełnienie DMA RX jest raportowane jako osobny licznik `overflow`, żeby nie udało błędu DUT-a.
-- **Piny**: zwykłe GPIO z dala od pinów strapping (0, 3, 45, 46), USB (19, 20) i pamięci modułu. Konkretne numery do ustalenia pod posiadany dev board.
+- **Piny** (ESP32-S3-DevKitC-1 N16R8): magistrala na GPIO 4–7, pętla wewnętrzna na GPIO 15–18, z dala od pinów strapping (0, 3, 45, 46), USB (19, 20), UART0 (43, 44), flash i PSRAM oktalnego (26–37). Tabela w `contract/i2s/commands.md`, numery w `main/Kconfig.projbuild`.
+- **`ws_width`**: makro `I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG` ustawia `ws_width = data_bit_width`; przy paddingu (16 w slocie 32) WS byłby za krótki, więc `i2s_role.c` ustawia `ws_width = slot`.
+- **Zegar modułu slave'a**: w roli slave ESP-IDF 5.2 bierze `mclk = 8 × BCLK` z nominalnego fs, czyli dokładnie granicę z #9513, a BCLK mastera FPGA bywa o 0,1% szybszy. Firmware podaje sterownikowi podwojone fs, gdy dzielnik z PLL 160 MHz zostaje ≥ 2 (do 48 kHz przy slocie 32).
+- **Dwa kontrolery na tych samych pinach** (`loop=1`): każdy kanał ustawia swoje piny przez `gpio_set_direction`, a ustawienie wejścia odłącza wyjście matrycy GPIO. Po inicjalizacji obu kontrolerów `i2s_role.c` łączy wspólne piny od nowa jako wejście i wyjście, tak jak `i2s_gpio_loopback_set` w ESP-IDF.
 - **`ver`** zwraca wersję protokołu i wersję aplikacji z `esp_app_desc` (hash gita).
 - **Transport to USB-Serial-JTAG, nie TinyUSB CDC.** Nie wymaga dodatkowego komponentu, a przez ten sam port działa `idf.py flash`. Dev board ma dwa złącza USB: natywne (protokół HIL, na stanowisku COM11) i mostek CH343 na UART0 (logi, COM10). Do testów wystarcza natywne.
-- **Konsola IDF nie może używać USB-Serial-JTAG**, bo logi mieszałyby się z odpowiedziami `hil_cmd`. Potrzebne są `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` i `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y`. S3 domyślnie ma konsolę dodatkową na USB-Serial-JTAG. W etapie 0 `sdkconfig` odtworzony po usunięciu dwa razy wrócił do tego ustawienia, mimo `sdkconfig.defaults`; pomogło dopiero przestawienie w `idf.py menuconfig`. Po każdym świeżym buildzie sprawdzamy te dwie opcje, a przyczynę pominięcia `sdkconfig.defaults` trzeba jeszcze znaleźć (§11).
+- **Konsola IDF nie może używać USB-Serial-JTAG**, bo logi mieszałyby się z odpowiedziami `hil_cmd`. Potrzebne są `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` i `CONFIG_ESP_CONSOLE_SECONDARY_NONE=y`. S3 domyślnie ma konsolę dodatkową na USB-Serial-JTAG. W etapie 0 `sdkconfig` odtworzony po usunięciu dwa razy wrócił do tego ustawienia. Przyczyna: echo było osobnym projektem w `esp32/echo/`, a `idf.py` czyta `sdkconfig.defaults` tylko z katalogu projektu, a tam go nie było (w repo jest tylko `echo/sdkconfig`). Firmware etapu 3 jest projektem w `esp32/` i ma tam swój `sdkconfig.defaults` (konsola, 16 MB flash, 240 MHz). Po pierwszym buildzie i tak sprawdzamy te dwie opcje w `esp32/sdkconfig`.
 - **DTR/RTS resetują układ.** Na USB-Serial-JTAG zmiana tych linii to automatyczny reset, którego używa `idf.py flash`. Niektóre sekwencje zostawiają układ w trybie pobierania firmware'u; wtedy pomaga przycisk RST albo odłączenie zasilania. Host otwiera port z DTR i RTS nieaktywnymi od początku (§8). ROM pisze komunikat startowy także na USB, a USB-Serial-JTAG buforuje go do odczytu, więc linia `ESP-ROM:...` po otwarciu portu oznacza reset, choćby wcześniejszy.
 
 ## 8. Orkiestrator PC
@@ -431,6 +439,30 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
 
+**Stan etapu 3 (2026-09-24).** Firmware jest w `esp32/`: `hil_cmd`, `hil_pattern`, `i2s_role` z komendami z `contract/commands.md`, `selftest` (wektory + pętla wewnętrzna) i partnerem na drugim kontrolerze (`cfg loop=1`, `contract/i2s/commands.md`). Na PC: `hil_pattern` przechodzi wszystkie 702 wektory kontraktu, rdzeń `hil_cmd` spełnia kontrakt na roli-atrapie (`make -C vertebra-hil/esp32/test`, także z ASan/UBSan), a `i2s_role.c` i transport przechodzą sprawdzenie składni na nagłówkach ESP-IDF 5.2.3. Build `idf.py` i kryterium etapu wymagają płytki i toolchainu xtensa; procedura:
+
+```
+cd vertebra-hil/esp32 && idf.py set-target esp32s3 && idf.py build flash    # potem: CONSOLE_* w sdkconfig (§7)
+# port natywnego USB (COM11), linie:
+ver                                             -> ok proto=1 dev=esp32s3 ip=i2s build=<hash>
+selftest                                        -> # petla ... (5 linii), ok vectors=702
+# master do sigroka (D0 = GPIO4 SCK, D1 = GPIO5 WS, D2 = GPIO6 DOUT), dla 16/32, 24/32, 16/16, 32/32:
+cfg role=master fs=48000 w=16 slot=32 seed=0x5eed1234 rx=0
+start
+#   sigrok-cli -d fx2lafw --config samplerate=24m --samples 4m -o cap.sr
+#   sigrok-cli -i cap.sr -P i2s:sck=D0:ws=D1:sd=D2 -A i2s=left:right > cap.txt
+#   sbt "hil/runMain newhope.vertebra.hil.i2s.SigrokI2sCheck cap.txt --seed 0x5eed1234 --w 16 --slot 32"
+stop
+# slave przez drugi kontroler: 10^6 ramek przy 48 kHz to ok. 21 s
+cfg role=slave fs=48000 w=16 slot=32 seed=0x5eed1234 rx=1 tx=1 loop=1
+start
+stat                                            # po >= 21 s
+stop
+stat                                            -> frames >= 1000000, bad=0, relocks=0, peer_* tak samo
+```
+
+Dla 44,1 kHz 24/32 i 96 kHz / 32 bity (BCLK 6,144 MHz) analizator 24 MS/s jest na granicy (§9). Slave warto sprawdzić też w simplex (`tx=0`), bo #9513 dotyczy full duplex.
+
 **Stan etapu 0 (2026-09-24).** Echo z obu płytek przechodzi z hosta na Windows: FPGA 4 KiB w 544 ms (UART 115200 przez PIC, COM12), ESP32 4 KiB w 23 ms (USB-Serial-JTAG, COM11), zero przekłamań. Otwarcie portu ESP32 nie resetuje już układu, a konsola IDF jest tylko na UART0. Zostały pytania z §11: VCCO banku 2, piny ESP32-S3, logic analyzer z sigrokiem.
 
 Etap 2 idzie krokami, każdy z własnym zielonym testplanem: 2a most i rejestry rdzenia (`HilCoreTestplan`, na płytce `HilCoreTop`), 2b `I2sPatternGen`/`Check` na wektorach kontraktu, 2c liczniki z migawką CDC, capture i wstrzykiwanie resetu, 2d `I2sHarness` z DUT-ami przez UART, 2e synteza w ISE.
@@ -488,8 +520,8 @@ Otwarte pytania:
 
 - [x] Częstotliwość oscylatora Mimas V2: 100 MHz na V10. Potwierdzone w praktyce: UART 115200 z dzielnikiem liczonym dla 100 MHz działa bez błędów (etap 0).
 - [ ] VCCO banku 2 (P7) = 3,3 V, ze schematu. Przy okazji bank 1 (P9).
-- [ ] Piny ESP32-S3 na posiadanym dev boardzie (wolne od strapping, USB i pamięci modułu). Płytka ma natywne USB i mostek CH343 na UART0 (§7).
-- [ ] Dlaczego `sdkconfig.defaults` był pomijany przy odtwarzaniu `sdkconfig` (§7): zweryfikować po `idf.py save-defconfig` i poprawić plik w repo.
+- [x] Piny ESP32-S3 na ESP32-S3-DevKitC-1 N16R8: magistrala GPIO 4–7, pętla wewnętrzna GPIO 15–18 (`contract/i2s/commands.md`, §7).
+- [x] Dlaczego `sdkconfig.defaults` był pomijany (§7): projekt echo w `esp32/echo/` nie miał własnego pliku, a `idf.py` czyta go tylko z katalogu projektu. Firmware etapu 3 ma `esp32/sdkconfig.defaults`; potwierdzić po pierwszym buildzie na płytce.
 - [ ] Jaki logic analyzer jest dostępny i czy obsłuży BCLK 6,144 MHz.
 - [x] Zajętość XC6SLX9 z oboma DUT-ami: mieści się, `v32_32` 79 % slice'ów (§10, wyniki etapu 2).
 - [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
