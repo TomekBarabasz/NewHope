@@ -113,9 +113,10 @@ NewHope/
       hw/ise/                       .ucf, skrypt xtclsh / Makefile
       hw/build/      (gitignore)    .bit / .bin
     host/                           sbt: hil (srcLayout)
-      src/main/                     EchoProbe (etap 0); HilLink, HilDevice, HilBench, HilSuite...
-      src/main/i2s/                 SigrokI2sCheck (etap 3)
-      src/test/i2s/                 I2sHilTestplan
+      src/main/                     EchoProbe (etap 0); HilLink, HilDevice, EspDevice, FpgaDevice, HilBench, HilSuite (etap 4)
+      src/main/i2s/                 SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4)
+      src/test/                     HilHostTestplan, HilFakes: host na atrapach płytek (etap 4)
+      src/test/i2s/                 I2sHilTestplan (etap 4)
     esp32/                          ESP-IDF (CMake), poza sbt
       CMakeLists.txt, sdkconfig.defaults
       main/                         main.c, i2s_role.c, Kconfig.projbuild (piny) (etap 3)
@@ -350,17 +351,21 @@ Orkiestrator to suita `TestplanSuite` w Scali, w podprojekcie sbt `hil` (`verteb
 | `HilDevice` | wspólny trait | `info`, `cfg(Map)`, `start`, `stop`, `stat: HilStat`, `dump` |
 | `EspDevice` | wspólna | `HilDevice` po protokole tekstowym |
 | `FpgaDevice[R]` | wspólna, generyczna po mapie rejestrów | `HilDevice` po moście binarnym; klucze `cfg` mapowane na rejestry przez `R` (np. `I2sHilRegs`) |
-| `HilBench` | wspólna | znajduje porty (opcje `--esp_com`/`--fpga_com` nadpisują `VERTEBRA_HIL_ESP`/`VERTEBRA_HIL_FPGA`), sprawdza wersje (§5), jedna instancja na JVM |
+| `HilBench` | wspólna | znajduje porty (opcje suity `-Desp_com`/`-Dfpga_com` nadpisują `VERTEBRA_HIL_ESP`/`VERTEBRA_HIL_FPGA`), sprawdza wersje (§5), jedna instancja na JVM |
 | `HilSuite` | wspólna | `TestplanSuite` + `hwScenario(name, variant)(body)` |
 | `I2sHilTestplan` | per IP | plan `hw_*`, konfiguracje, scenariusze |
 
-Dzięki firmware PIC z osobnym portem programowania (§6) `HilBench` może sam utrzymywać płytkę w zgodności z kodem: gdy hash builda odczytany z rejestrów różni się od hasha świeżo zbudowanego `.bin`, wgrywa go przez XMODEM, czeka na restart FPGA i ponawia `ver`. Porty: `VERTEBRA_HIL_FPGA_PROG` (programowanie) i `VERTEBRA_HIL_FPGA` (UART).
+Sprawdzenie wersji (etap 4): `proto` i IP muszą się zgadzać, inaczej suita kończy się błędem. `build` (8 cyfr hasha gita, `-dirty` albo najmłodszy bit rejestru FPGA) `HilGit` szuka w repo i porównuje źródła płytki od tego commita z drzewem roboczym (`git diff`, ścieżki w `HilIp`: dla ESP32 `esp32/` bez `test/` i `echo/` plus wektory, dla FPGA `fpga/hw` bez testów, `i2s/hw/spinal/main`, `mimas_v2`). Zmienione źródła albo nieznany commit znaczą nieaktualną płytkę: błąd z poleceniem, co przeflashować, albo tylko ostrzeżenie z `-Dallow_stale=1` / `VERTEBRA_HIL_ALLOW_STALE=1`. Build `-dirty` i brak gita dają ostrzeżenie w raporcie, bo zgodności nie da się wtedy stwierdzić. Porównanie ze źródłami, a nie z HEAD, jest celowe: commit w kodzie hosta nie wymaga przeflashowania płytek.
+
+Dzięki firmware PIC z osobnym portem programowania (§6) `HilBench` może sam utrzymywać płytkę w zgodności z kodem: gdy hash builda odczytany z rejestrów różni się od hasha świeżo zbudowanego `.bin`, wgrywa go przez XMODEM, czeka na restart FPGA i ponawia `ver`. Porty: `VERTEBRA_HIL_FPGA_PROG` (programowanie) i `VERTEBRA_HIL_FPGA` (UART). Etap 4 tego nie robi: przy nieaktualnym bitstreamie `HilBench` kończy się komunikatem, a samo wgrywanie przez XMODEM dochodzi razem z budowaniem `.bin` ze skryptu.
 
 `HilStat` to case class z licznikami z §4 plus `overflow`. Scenariusz kończy się jedną z nazwanych asercji, np. `expectClean(minFrames)` albo `expectGaps(exact)`. Przy błędzie `hwScenario` sam robi `dump` z obu stron i dekoduje bufor referencyjnym wzorcem, żeby komunikat mówił „ramka 1532: kanały zamienione”, a nie „bad=1”.
 
 ### Brak stanowiska to nie błąd
 
 Bez podłączonego stanowiska testy `hw_*` są rejestrowane normalnie, a ciało testu robi `assume(bench.isDefined, ...)`. ScalaTest oznacza je jako *canceled*, a nie *failed*. Kompletność liczy je jako zaimplementowane, bo test istnieje. Dzięki temu `sbt test` na laptopie bez płytek zostaje zielony, a raport jasno pokazuje, co nie było uruchomione.
+
+To samo dotyczy jednej płytki: `hwScenario(name, variant, needs)` podaje, których płytek scenariusz potrzebuje, a brakująca daje *canceled* z nazwą zmiennej do ustawienia. Inaczej jest, gdy port jest ustawiony, a płytka nie odpowiada albo ma złą wersję: ktoś chciał użyć stanowiska, więc to *failed* z opisem. Ruch na obu portach każdego testu trafia do `host/target/hil-logs/<suita>/<test>/<płytka>.log` (znaczniki czasu, tekst ESP32, bajty mostu FPGA, ponowienia).
 
 ### Plan I2S (szkic)
 
@@ -390,6 +395,10 @@ sbt "hil/testOnly *I2sHilTestplan -- -z param"       # bez sprzętu
 ```
 
 Suity `hil` nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecution := false` w tym podprojekcie.
+
+Plan w `I2sHilTestplan` rośnie z etapami: testpoint z tabeli wyżej dochodzi w etapie, który go robi. `testplan completeness` wymaga kompletnego V1, więc wpisanie np. `hw_mst_rx_frame` przed etapem 6 zrobiłoby `sbt test` czerwonym bez stanowiska.
+
+Host sprawdza się sam na atrapach płytek (`HilHostTestplan`, bez sprzętu): model mostu FPGA według `contract/commands.md` ze wstrzykiwaniem błędów (zgubiona odpowiedź, zła suma w obie strony, śmieci przed `5A`, porzucenie niedokończonej ramki po 10 ms) i ESP32 ze skryptu odpowiedzi. `host_hw_link_on_fakes` uruchamia na nich całe `I2sHilTestplan`, więc ciało `hw_link` jest sprawdzone, zanim pierwszy raz zobaczy płytkę.
 
 ## 9. Stanowisko
 
@@ -438,6 +447,17 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 | 7 | I2S V3 | reset DUT-a w losowym momencie, `hw_clock_ratio_sweep` (dynamiczne M/D DCM\_CLKGEN), `hw_soak` | 10 min soak na każdą rolę bez błędu; znaleziona granica zegara slave'a zgodna z `supportsSckHalf` |
 
 Etapy 2 i 3 są niezależne i mogą iść równolegle.
+
+**Stan etapu 4 (2026-09-24).** Host jest w `host/`: `HilLink` (port, timeouty, log ruchu; porty otwiera `HilSerial`, z którego korzysta też `EchoProbe`), `EspDevice`, `FpgaDevice[R]` z kluczami `cfg` wspólnymi i z `I2sFpgaMap`, `HilBench` (porty, wersje, `HilGit`), `HilSuite` (`hwScenario`). `sbt hil/test` bez płytek: `HilHostTestplan` 7/7, `hw_param_bounds` zielony, `hw_link` (esp32, fpga) *canceled*. `hw_param_bounds` liczy: DCM\_CLKGEN 29/59 (49,1525 MHz, +0,0011 %) i 14/31 (45,1613 MHz, +0,0064 %), BCLK FPGA mastera ≤ 3,072 MHz (8 × BCLK daleko od 160 MHz), półokres SCK ESP32 dla FPGA slave'a ≥ 7,69 cykla `dut` po odjęciu okresu PLL ESP32 (wymagane > 3), wszystkie konfiguracje z `I2sBenchCfg` checkable w obu kierunkach, najmniej 7 widocznych bitów hasha (niedopasowanie 24 ↔ 16). Kryterium etapu wymaga stanowiska:
+
+```
+# bitstream I2sHarnessTop_v16_32 i firmware z esp32/ z aktualnego drzewa
+sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+#   hw_link (esp32): ver, err 1 / err 2, selftest == 702 wektory, 50 x ver bez resetu
+#   hw_link (fpga):  identyfikacja, 476 transakcji scratch bez ponowienia, statusy mostu,
+#                    porzucenie niedokończonej ramki, start/stop bez partnera
+# log ruchu: vertebra-hil/host/target/hil-logs/I2sHilTestplan/
+```
 
 **Wyniki etapu 3 na płytce (2026-09-24).**
 
