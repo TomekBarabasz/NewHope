@@ -40,10 +40,17 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
   private def patternPart(slots : Long) : Long = gap.fold(slots) { case (e, l) => slots * e / (e + l) }
 
   // --- FPGA: liczniki przy stop -------------------------------------------
+  // Lock checkera FPGA: bieg z nadajacym ESP32.
+  fpga.extraStatus = () =>
+    if (fpga.running && espFlag("tx") && overlap(espOn, fpgaOn) > 3) 1L << StatusBit.Locked else 0L
+
+  /** Reset DUT-a: kazdy daje jeden blad po obu stronach (i nic po ostatnim). */
+  private def resets : Long = if (fpgaOn.isDefined) fpga.rw(Addr.RstCount) else 0L
+
   fpga.onCtrl = {
     case CtrlBit.Start => fpgaOn = Some((now, None))
     case CtrlBit.Stop  => fpgaOn = fpgaOn.map { case (a, _) => (a, Some(now)) }; snapshotFpga()
-    case _             =>
+    case _             => fpgaOn = fpgaOn.map { case (a, b) => (a, Some(b.getOrElse(now))) }     // soft reset
   }
 
   private def snapshotFpga() : Unit = {
@@ -69,6 +76,8 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
       }
     }
     if (espFlag("rx")) cnt("sent") = patternPart(overlap(espOn, fpgaOn))   // generator FPGA
+    cnt("rst_done") = resets
+    if (resets > 0 && cnt("frames") > 0) cnt("bad") = cnt("bad") + resets
   }
 
   // --- ESP32 ---------------------------------------------------------------
@@ -92,6 +101,7 @@ class FakeI2sBus(val c : I2sBenchCfg, val seed : Long, val build : String, val f
     // Z `frames` ramek na magistrali luki zajmuja l z kazdych e + l.
     val gaps = if (frames > 0) gap.fold(0L) { case (e, l) => val g = frames * l / (e + l); frames -= g; g }
                else 0L
+    if (frames > 0) bad += resets
     s"sent=$sent frames=$frames bad=$bad gaps=$gaps relocks=0 lock_at=$lockAt first_err=$err overflow=0"
   }
 
