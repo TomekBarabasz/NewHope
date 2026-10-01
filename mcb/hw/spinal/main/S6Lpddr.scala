@@ -26,6 +26,15 @@ class s6_lpddr(val c: MigConfig = MigConfig(), val simulation: Boolean = false)
     // wartosci domyslne z s6_lpddr.v wystarcza. Dziala dla obu konfiguracji.
     val DEBUG_EN              = 0
     val C3_MEMCLK_PERIOD      = c.memClkPeriod
+    // Dzielniki PLL. Dzialaja tylko z zalatanym s6_lpddr.v, w ktorym te
+    // parametry przeniesiono z ciala modulu do listy #(). W oryginale sa
+    // localparam-ami i nadpisanie nie ma zadnego skutku.
+    val C3_CLKFBOUT_MULT      = c.clkFbOutMult
+    val C3_DIVCLK_DIVIDE      = c.divClkDivide
+    val C3_CLKOUT0_DIVIDE     = c.clkOut0Divide
+    val C3_CLKOUT1_DIVIDE     = c.clkOut1Divide
+    val C3_CLKOUT2_DIVIDE     = c.clkOut2Divide
+    val C3_CLKOUT3_DIVIDE     = c.clkOut3Divide
     val C3_CALIB_SOFT_IP      = "TRUE"
     val C3_SIMULATION         = if (simulation) "TRUE" else "FALSE"
     val C3_RST_ACT_LOW        = 0
@@ -105,7 +114,7 @@ class s6_lpddr(val c: MigConfig = MigConfig(), val simulation: Boolean = false)
       resetKind        = SYNC,
       resetActiveLevel = HIGH
     ),
-    frequency = FixedFrequency(c.uiFrequency)
+    frequency = c.uiFrequency
   )
 
   /**

@@ -54,14 +54,15 @@ object VgaAxisTiming {
  *               (75 KiB). Przy 115200 bd to roznica 27 s vs 7 s na obrazek.
  */
 case class VgaFbConfig(
-    mig        : MigConfig     = MigConfig(dataWidth = 128, memClkPeriod = 10000),
+    mig        : MigConfig     = MigConfig.forClocks(memMHz = 100, uiMHz = 50),
     h          : VgaAxisTiming = VgaAxisTiming.h640,
     v          : VgaAxisTiming = VgaAxisTiming.v480,
     scale      : Int           = 2,
     bufferA    : BigInt        = 0x00000000,
     bufferB    : BigInt        = 0x00100000,
     burstWords : Int           = 20,
-    uartBaud   : Int           = 19200
+    uartBaud   : Int           = 19200,
+    pixelDiv   : Int           = 0
 ) {
 
   // ---- kolor ---------------------------------------------------------
@@ -110,8 +111,31 @@ case class VgaFbConfig(
   require(bufferB + frameBytes <= mig.memBytes, "bufor B wychodzi poza pamiec")
 
   // ---- zegar i przepustowosc ------------------------------------------
-  val uiClkHz    = mig.uiClkHz
-  val frameHz    = uiClkHz.toDouble / (h.total.toLong * v.total)
+  val uiClkHz = mig.uiClkHz
+
+  /**
+   * ILE TAKTOW UI NA JEDEN PIKSEL.
+   *
+   * Przy uiClk = 25 MHz wychodzi 1 i projekt zachowuje sie dokladnie tak, jak
+   * w pierwszej wersji: zegar UI JEST zegarem piksela. Przy uiClk = 50 MHz
+   * wychodzi 2, czyli VgaCtrl dostaje zezwolenie zegarowe co drugi takt
+   * i piksele leca 25,000 MHz - ta sama liczba co wczesniej, tylko uzyskana
+   * inaczej. Reszta projektu (MCB, UART, painter, czytnik) chodzi pelna
+   * predkoscia i na zmianie tylko zyskuje: na jeden piksel przypada dwa razy
+   * wiecej taktow na pobranie danych z pamieci.
+   *
+   * Dzielnik zamiast drugiej domeny zegarowej, bo CDC kosztuje FIFO
+   * asynchroniczne, drugi DCM i nowe TIMESPEC-i, a kupuje 0,7% dokladnosci
+   * zegara piksela, ktorego zaden monitor nie zauwazy.
+   *
+   * 0 = dobierz automatycznie, najblizej nominalnych 25,175 MHz.
+   */
+  val pixelDivider = if (pixelDiv > 0) pixelDiv
+                     else scala.math.max(1, scala.math.round(uiClkHz / 25175000.0).toInt)
+  val pixelClkHz = uiClkHz.toDouble / pixelDivider
+  val frameHz    = pixelClkHz / (h.total.toLong * v.total)
+  require(frameHz > 55.0 && frameHz < 66.0,
+    f"odswiezanie ${frameHz}%.1f Hz jest poza zakresem - zly uiClkHz albo zly pixelDiv")
   /** Czytamy tylko piksele, nie wypelnienie stride. */
   val fetchBytesPerSec = fbWidth.toDouble * fbHeight * frameHz
   val portBytesPerSec  = mig.portPeakBytesPerSec.toDouble
@@ -154,7 +178,8 @@ case class VgaFbConfig(
 
   def report(): Unit = {
     println(f"[vgademo] port MCB      : ${mig.dataWidth} b, memclk ${mig.memClkHz / 1000000} MHz")
-    println(f"[vgademo] zegar UI/px   : ${uiClkHz / 1000000.0}%.3f MHz -> ${frameHz}%.2f Hz odswiezania")
+    println(f"[vgademo] zegar UI      : ${uiClkHz / 1000000.0}%.3f MHz")
+    println(f"[vgademo] zegar piksela : ${pixelClkHz / 1000000.0}%.3f MHz (UI / $pixelDivider) -> ${frameHz}%.2f Hz odswiezania")
     println(f"[vgademo] ekran         : ${h.visible} x ${v.visible}, total ${h.total} x ${v.total}")
     println(f"[vgademo] framebuffer   : $fbWidth x $fbHeight x 8 b, stride $lineStride B, $frameBytes B na klatke")
     println(f"[vgademo] pobieranie    : ${fetchBytesPerSec / 1e6}%.1f MB/s z ${portBytesPerSec / 1e6}%.1f MB/s portu (${100 * fetchBytesPerSec / portBytesPerSec}%.1f%%)")

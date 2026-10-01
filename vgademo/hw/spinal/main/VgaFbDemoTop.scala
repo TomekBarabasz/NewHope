@@ -125,7 +125,7 @@ class VgaFbDemoTop(c: VgaFbConfig) extends Component {
     status.io.frameStart := vga.io.frameStart
     status.io.bytePulse  := loader.io.bytePulse
 
-    val ss = SevenSegMux(clkFrequency = c.mig.uiFrequency, frameRate = 1 kHz)
+    val ss = SevenSegMux(c.mig.uiHertz, frameRate = 1 kHz)
     ss.io.digits := status.io.digits
     io.seg := ss.io.seg
     io.en  := ss.io.en
@@ -167,7 +167,7 @@ object VgaFbDemoTopVerilog extends App {
   val baud  = args.find(_.forall(_.isDigit)).map(_.toInt).getOrElse(115200)
 
   val cfg = VgaFbConfig(
-    mig        = MigConfig(dataWidth = 128, memClkPeriod = 10000),
+    mig        = MigConfig.forClocks(memMHz = 100, uiMHz = 50),
     scale      = scale,
     burstWords = 20,
     uartBaud   = baud
