@@ -29,7 +29,11 @@ class FakePort(val name : String) extends HilPort {
 }
 
 /** Most i rejestry harnessu I2S wedlug contract/commands.md. */
-class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2S") {
+/** `counterNames`: uklad licznikow 0x010- (HilFpgaMap.counterNames);
+  * `ipRegs`: blok 0x100- z wartosciami po resecie (domyslnie I2S). */
+class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2S",
+               val counterNames : Seq[String] = Counters.names,
+               ipRegs : Option[Map[Int, Long]] = None) {
   val port = new FakePort("fake-fpga")
   port.onWrite = b => b.foreach(x => feed(x & 0xFF))
 
@@ -45,7 +49,7 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
   val rw = mutable.Map[Int, Long](Addr.Scratch -> 0L) ++
     (Seq(Addr.GenSeed, Addr.GapMode, Addr.GapEvery, Addr.GapLen,
          Addr.RstCount, Addr.RstSeed, Addr.RstMin, Addr.RstMask, Addr.RstLen).map(_ -> 0L)) ++
-    Seq(0x100 -> 0L, 0x101 -> (variantCode & 0xFF), 0x102 -> ((variantCode >> 8) & 0xFF))
+    ipRegs.getOrElse(Map(0x100 -> 0L, 0x101 -> (variantCode & 0xFF), 0x102 -> ((variantCode >> 8) & 0xFF)))
 
   val counters = mutable.Map[String, Long]().withDefaultValue(0L)
   counters("lock_at") = 0xFFFFFFFFL
@@ -80,8 +84,8 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
     case Addr.Status  => Right((if (running) 1L << StatusBit.Running else 0L) |
                                (if (snapshot) 1L << StatusBit.Snapshot else 0L) | extraStatus())
     case Addr.Variant => Right(variantCode)
-    case x if x >= Counters.Base && x < Counters.Base + Counters.names.size =>
-      Right(counters(Counters.names(x - Counters.Base)))
+    case x if x >= Counters.Base && x < Counters.Base + counterNames.size =>
+      Right(counters(counterNames(x - Counters.Base)))
     case x if x >= Capture.Base && x < Capture.Base + Capture.size =>
       val (i, j) = ((x - Capture.Base) / Capture.Stride, (x - Capture.Base) % Capture.Stride)
       Right(if (i < capture.size && j < Capture.WordsPerEntry) capture(i)(j) else 0L)

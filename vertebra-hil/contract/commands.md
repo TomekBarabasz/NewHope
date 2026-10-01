@@ -36,6 +36,10 @@ Liczby są dziesiętne, a słowa danych i seed szesnastkowe, 8 cyfr, małe liter
 | `dump` | stop | `ok n=<liczba linii>`, potem n linii `idx got_l got_r exp_l exp_r`, na końcu `ok end` |
 | `selftest` | stop | `ok vectors=<liczba>` albo `err 6 …`: wektory IP (`<ip>/vectors/`) wbudowane w firmware, potem test własny roli (dla I2S pętla wewnętrzna) |
 
+### Komendy roli
+
+Rola IP może dodać własne komendy, opisane w `<ip>/commands.md` (np. `load` i `rec` frontendu). Obowiązują je te same zasady co komendy wspólne: argumenty `klucz=wartość`, nieznany klucz to `err 2`, zła wartość `err 3`, komenda dozwolona tylko w stanie stop daje w biegu `err 4`. Odpowiedź to jedna linia `ok …` / `err …` albo, przy komendzie zwracającej dane, `ok n=<liczba linii>`, n linii danych i `ok end`, jak `dump`. Rola bez własnych komend zachowuje się dokładnie jak przed tym rozszerzeniem, więc wersja protokołu się nie zmienia.
+
 `first_err` to `-` albo `n:got_l:got_r:exp_l:exp_r` (n dziesiętnie, słowa hex). `lock_at = -1` oznacza brak locka. `sent` to liczba ramek wzorca oddanych do DMA TX, `overflow` to liczba przepełnień DMA RX (osobno od `bad`, żeby nie udawać błędu DUT-a). `dump` zwraca okno ramek wokół pierwszego błędu; `idx` to indeks ramki w sensie checkera (jak `lock_at`).
 
 ## FPGA: binarny most do rejestrów

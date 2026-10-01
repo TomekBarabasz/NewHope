@@ -2,6 +2,7 @@ package newhope.vertebra.hil
 
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.hil.i2s.{I2sBenchCfg, I2sHil, I2sHilPlan, I2sHilTestplan, I2sHilVariant, I2sWords}
+import newhope.vertebra.hil.fe.{FakeFeBus, FeHil, FeHilTestplan, FeHilVariant}
 import org.scalatest.{Args, ConfigMap, Reporter}
 import org.scalatest.events.{Event, TestCanceled, TestFailed, TestSucceeded}
 import HilProtocol._
@@ -56,7 +57,13 @@ object HilHostPlan {
       stimulus = Seq("I2sHilTestplan z HilBench na FakeI2sBus (ramki plyna z fs, gdy pracuja obie strony)",
                      "drugi bieg: przeklamana ramka po stronie FPGA, zamienione kanaly po stronie ESP32"),
       checking = Seq("czysty bieg: hw_link, hw_slv_rx_frame, hw_slv_tx_frame przechodza",
-                     "bieg z bledami: hw_slv_* failed, komunikat nazywa przyczyne i numer ramki (I2sDiag)")))
+                     "bieg z bledami: hw_slv_* failed, komunikat nazywa przyczyne i numer ramki (I2sDiag)")),
+    Testpoint("host_fe_on_fakes", Stage.V1,
+      "Testy sprzetowe frontendu (FeHilTestplan) na atrapach obu plytek",
+      stimulus = Seq("FeHilTestplan z HilBench na FakeFeBus (load, rec, liczniki FE; nagranie z DcGolden)",
+                     "drugi bieg: przeklamane y ramki 500, echo x ramki 700, zgubiona ramka 900"),
+      checking = Seq("czysty bieg: hw_link, hw_param_bounds, hw_fe_* przechodza, hw_fe_long canceled bez -Dlong",
+                     "bieg z bledami: hw_fe_chain failed, komunikat nazywa ramke 500 (DcGolden), N0 i przerwe idx")))
 }
 
 class HilHostTestplan extends TestplanSuite {
@@ -282,6 +289,48 @@ class HilHostTestplan extends TestplanSuite {
     assert(x(I2sWords((e.l >>> 1) | 0x8000L, e.r >>> 1)).contains("za pozno"), x(I2sWords(e.l >>> 1, e.r >>> 1)))
     assert(x(I2sWords(((e.l << 1) & 0xFFFFL) | 1L, (e.r << 1) & 0xFFFFL)).contains("za wczesnie"))
     assert(x(I2sWords(e.l ^ 0x0101L, e.r)).contains("L xor=00000101 (2)"))
+  }
+
+  /** Wyniki testow suity po nazwie. */
+  def runSuite(suite : org.scalatest.Suite, config : ConfigMap) : Map[String, String] = {
+    val events = scala.collection.mutable.ArrayBuffer[Event]()
+    val rep = new Reporter { def apply(ev : Event) : Unit = synchronized { events += ev } }
+    suite.run(None, Args(rep, configMap = config))
+    events.collect {
+      case x : TestSucceeded => x.testName -> "ok"
+      case x : TestFailed    => x.testName -> s"FAILED: ${x.message}"
+      case x : TestCanceled  => x.testName -> s"canceled: ${x.message}"
+    }.toMap
+  }
+
+  /** FeHilTestplan na FakeFeBus. */
+  def runFeOnFakes(setup : FakeFeBus => Unit) : Map[String, String] = {
+    val h   = head.getOrElse("00000000")
+    val bus = new FakeFeBus(FeHilVariant.mimas, h, java.lang.Long.parseLong(h, 16) & ~1L)
+    setup(bus)
+    val b = HilBench.open(FeHil, HilBenchOpts(Some("E" -> "t"), Some("F" -> "t"), allowStale = true),
+                          opener(Map("E" -> bus.esp.port, "F" -> bus.fpga.port)))
+    val suite = new FeHilTestplan { override def bench = b }
+    try runSuite(suite, ConfigMap("samples" -> "3000"))
+    finally b.foreach(_.foreach(_.close()))
+  }
+
+  testpoint("host_fe_on_fakes") {
+    val clean = runFeOnFakes(_ => ())
+    for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_fe_chain", "hw_fe_corners",
+                  "hw_fe_removal", "hw_fe_bypass", "hw_fe_reset")) {
+      info(s"$n: ${result(clean, n)}")
+      assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
+    }
+    assert(result(clean, "hw_fe_long").startsWith("canceled"), result(clean, "hw_fe_long"))
+
+    val faulty = runFeOnFakes { bus => bus.yFault = Some(500); bus.xFault = Some(700); bus.dropAt = Some(900) }
+    val chain = result(faulty, "hw_fe_chain")
+    info(s"hw_fe_chain z bledami: ${chain.take(600)}")
+    assert(chain.startsWith("FAILED"), chain)
+    assert(chain.contains("ramka 500 (odcinek od 0, probka 500)") && chain.contains("DcGolden"), chain)
+    assert(chain.contains("N0: echo x nie pasuje") && chain.contains("ramka 700"), chain)
+    assert(chain.contains("ramka 900: idx 901, oczekiwany 900"), chain)
   }
 
   /** I2sHilTestplan na FakeI2sBus; zwraca wynik kazdego testu po nazwie. */

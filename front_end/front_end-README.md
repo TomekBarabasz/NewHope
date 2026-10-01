@@ -63,6 +63,15 @@ ciasna: przy 7 model cyklowy gubi bity.
 Porty są `Flow`, więc `StreamConformance` (payload_stable, backpressure)
 nie ma zastosowania; ciszę w resecie sprawdzają `dc_reset` i `i2s_reset`.
 
+## Na sprzęcie (vertebra-hil)
+
+`MicFrontEnd` ma harness na Mimas V2 (`vertebra-hil.md` §12, `contract/fe/commands.md`). ESP32-S3 udaje INMP441 jako slave I2S i odbiera wynik z powrotem po I2S. PC porównuje go bit w bit z `DcGolden`, licząc golden z echa próbki N0, a echo N0 osobno ze słowem bodźca.
+
+```
+sbt "hilFpga/testOnly *FeHarnessTestplan"                                  harness w symulacji
+sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"      stanowisko
+```
+
 ## Pliki
 
 ```

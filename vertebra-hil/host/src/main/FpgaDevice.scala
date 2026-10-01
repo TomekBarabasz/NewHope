@@ -47,6 +47,21 @@ trait HilFpgaMap {
   def variantName(code : Long) : Option[String]
   /** None = konfiguracja poprawna; `get` daje wartosc klucza po zmianie. */
   def validate(variant : Long, get : String => Long) : Option[String] = None
+
+  /** Uklad licznikow 0x010- (migawka przy stop). Domyslnie wspolny uklad
+    * checkera wzorca (I2S); IP bez checkera podaje wlasny (FeFpgaMap). */
+  def counterNames : Seq[String] = Counters.names
+
+  /** Liczniki z migawki -> HilStat (stat). */
+  def toStat(c : Map[String, Long]) : HilStat = {
+    val lockAt = c("lock_at")
+    HilStat(c("sent"), c("frames"), c("bad"), c("gaps"), c("relocks"),
+            if (lockAt == 0xFFFFFFFFL) -1L else lockAt,
+            if (c("bad") == 0) None
+            else Some(HilErr(c("err_n"), c("err_got_l"), c("err_got_r"), c("err_exp_l"), c("err_exp_r"))),
+            c("overflow"),
+            scala.collection.immutable.ListMap("cap_count" -> c("cap_count").toString, "rst_done" -> c("rst_done").toString))
+  }
 }
 
 class FpgaDevice[R <: HilFpgaMap](val link : HilLink, val map : R, val label : String = "fpga")
@@ -193,20 +208,17 @@ class FpgaDevice[R <: HilFpgaMap](val link : HilLink, val map : R, val label : S
       throw new HilDeviceError(label, Some(4), s"$what: brak migawki licznikow (bieg trwa albo nie bylo stop)")
 
   /** Migawka z ostatniego stop (commands.md: liczniki wazne przy status.snapshot). */
-  def stat() : HilStat = {
+  def stat() : HilStat = map.toStat(counters())
+
+  /** Wszystkie liczniki migawki w ukladzie IP (map.counterNames). */
+  def counters() : Map[String, Long] = {
     snapshotOrFail("stat")
-    val c = Counters.names.map(n => n -> read(Counters.addr(n))).toMap
-    val lockAt = c("lock_at")
-    HilStat(c("sent"), c("frames"), c("bad"), c("gaps"), c("relocks"),
-            if (lockAt == 0xFFFFFFFFL) -1L else lockAt,
-            if (c("bad") == 0) None
-            else Some(HilErr(c("err_n"), c("err_got_l"), c("err_got_r"), c("err_exp_l"), c("err_exp_r"))),
-            c("overflow"),
-            scala.collection.immutable.ListMap("cap_count" -> c("cap_count").toString, "rst_done" -> c("rst_done").toString))
+    map.counterNames.zipWithIndex.map { case (n, i) => n -> read(Counters.Base + i) }.toMap
   }
 
   def dump() : Seq[HilDumpEntry] = {
     snapshotOrFail("dump")
+    if (!map.counterNames.contains("cap_count")) return Nil      // IP bez bufora capture
     val n = read(Counters.addr("cap_count")).toInt
     if (n > Capture.Depth) throw new HilDeviceError(label, None, s"cap_count=$n > ${Capture.Depth}")
     (0 until n).map { i =>

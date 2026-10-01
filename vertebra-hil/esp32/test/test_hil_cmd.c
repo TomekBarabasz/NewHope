@@ -56,8 +56,39 @@ static int v_dump_count(void) { return 2; }
 static void v_dump_line(int i, char *o, size_t len) { snprintf(o, len, "%d 00000001 00000002 00000003 00000004", i); }
 static int v_selftest(int *n, char *msg, size_t len) { (void)msg; (void)len; *n = 702; return 0; }
 
+/* Komenda roli: echo a=.. [b=..] -> "ok a=..", linie danych, "ok end". */
+static int v_echo(int argc, char **argv, char *msg, size_t len)
+{
+    static const char *const ks[] = { "a", "b", NULL };
+    const char *v[2];
+    int e = hil_cmd_args(argc, argv, ks, v, msg, len);
+    if (e) {
+        return e;
+    }
+    if (!v[0]) {
+        snprintf(msg, len, "brak a=");
+        return HIL_ERR_RANGE;
+    }
+    hil_cmd_ok(" n=2 a=%s", v[0]);
+    hil_cmd_data(v[0]);
+    hil_cmd_data(v[1] ? v[1] : "-");
+    hil_cmd_ok(" end");
+    return 0;
+}
+static int v_any(int argc, char **argv, char *msg, size_t len)
+{
+    (void)argc; (void)argv; (void)msg; (void)len;
+    hil_cmd_ok("%s", "");
+    return 0;
+}
+static const hil_role_cmd_t cmds[] = {
+    { "echo", true, v_echo },
+    { "any", false, v_any },
+};
+
 static const hil_role_t role = {
     "i2s", keys, K_COUNT, values, v_validate, v_start, v_stop, v_stat, v_dump_count, v_dump_line, v_selftest,
+    cmds, 2,
 };
 
 /* Wysyla linie i porownuje cala odpowiedz (prefiks, gdy exp konczy sie na '*'). */
@@ -127,11 +158,23 @@ int main(void)
     expect("dump", "err 4 dump w trakcie biegu, najpierw stop\n");
     expect("selftest", "err 4 selftest w trakcie biegu, najpierw stop\n");
     expect("stat", "ok sent=1 frames=2\n");
+    expect("echo a=1", "err 4 echo w trakcie biegu, najpierw stop\n");
+    expect("any", "ok\n");                             /* komenda roli dozwolona w biegu */
     expect("stop", "ok\n");
     expect("stop", "ok\n");                            /* stop w kazdym stanie */
     expect("stat now", "err 3 stat nie ma argumentow\n");
     expect("dump", "ok n=2\n0 00000001 00000002 00000003 00000004\n1 00000001 00000002 00000003 00000004\nok end\n");
     expect("selftest", "ok vectors=702\n");
+
+    /* komendy roli (contract/commands.md, "Komendy roli") */
+    expect("echo a=12 b=xyz", "ok n=2 a=12\n12\nxyz\nok end\n");
+    expect("echo a=12", "ok n=2 a=12\n12\n-\nok end\n");
+    expect("echo b=1", "err 3 brak a=\n");
+    expect("echo c=1", "err 2 nieznany klucz 'c'\n");
+    expect("echo a=1 a=2", "err 3 klucz 'a' podany dwa razy\n");
+    expect("echo a=", "err 3 'a=': oczekiwane klucz=wartosc\n");
+    expect("echo a", "err 3 'a': oczekiwane klucz=wartosc\n");
+    expect("ech", "err 1 nieznana komenda 'ech'\n");
     if (starts != 1 || stops != 2) {
         printf("FAIL starts=%d stops=%d\n", starts, stops);
         failures++;

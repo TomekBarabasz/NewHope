@@ -298,6 +298,78 @@ static void cmd_selftest(char **argv, int argc)
     OK(" vectors=%d", vectors);
 }
 
+/* ------------------------------------------------------------------ */
+/*  Komendy roli                                                        */
+/* ------------------------------------------------------------------ */
+
+void hil_cmd_ok(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    vemit("ok", fmt, ap);
+    va_end(ap);
+}
+
+void hil_cmd_data(const char *line)
+{
+    emit("", "%s", line);
+}
+
+int hil_cmd_args(int argc, char **argv, const char *const *keys, const char **vals, char *msg, size_t len)
+{
+    int nk = 0;
+    while (keys[nk]) {
+        vals[nk] = NULL;
+        nk++;
+    }
+    for (int a = 1; a < argc; a++) {
+        char *eq = strchr(argv[a], '=');
+        if (!eq || eq == argv[a] || eq[1] == '\0') {
+            snprintf(msg, len, "'%s': oczekiwane klucz=wartosc", argv[a]);
+            return HIL_ERR_RANGE;
+        }
+        *eq = '\0';
+        int ki = -1;
+        for (int i = 0; i < nk; i++) {
+            if (strcmp(keys[i], argv[a]) == 0) {
+                ki = i;
+                break;
+            }
+        }
+        if (ki < 0) {
+            snprintf(msg, len, "nieznany klucz '%s'", argv[a]);
+            return HIL_ERR_UNKNOWN_KEY;
+        }
+        if (vals[ki]) {
+            snprintf(msg, len, "klucz '%s' podany dwa razy", argv[a]);
+            return HIL_ERR_RANGE;
+        }
+        vals[ki] = eq + 1;
+    }
+    return 0;
+}
+
+static bool role_cmd(char **argv, int argc)
+{
+    for (int i = 0; i < s_role->ncmds; i++) {
+        const hil_role_cmd_t *c = &s_role->cmds[i];
+        if (strcmp(c->name, argv[0]) != 0) {
+            continue;
+        }
+        if (c->stopped_only && s_running) {
+            ERR(HIL_ERR_STATE, "%s w trakcie biegu, najpierw stop", argv[0]);
+            return true;
+        }
+        char msg[160] = "";
+        int e = c->fn(argc, argv, msg, sizeof(msg));
+        if (e) {
+            ERR(e, "%s", msg);
+        }
+        return true;
+    }
+    return false;
+}
+
 typedef struct {
     const char *name;
     void (*fn)(char **argv, int argc);
@@ -340,6 +412,9 @@ void hil_cmd_line(char *line)
             s_cmds[i].fn(argv, argc);
             return;
         }
+    }
+    if (role_cmd(argv, argc)) {
+        return;
     }
     ERR(HIL_ERR_UNKNOWN_CMD, "nieznana komenda '%s'", argv[0]);
 }

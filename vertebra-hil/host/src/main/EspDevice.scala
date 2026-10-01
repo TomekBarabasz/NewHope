@@ -110,21 +110,56 @@ class EspDevice(val link : HilLink, val label : String = "esp32") extends HilDev
   def stat() : HilStat = parseStat(label, cmd("stat"))
 
   def dump() : Seq[HilDumpEntry] = {
-    val head = cmd("dump")
+    val (_, lines) = cmdData("dump")
+    lines.map(l => parseDumpLine(l).getOrElse(throw new HilDeviceError(label, None, s"dump: zla linia '$l'")))
+  }
+
+  /** Komenda z danymi (contract/commands.md: dump, komendy roli jak `rec`):
+    * `ok n=<linii> ...`, n linii, `ok end`. Zwraca pola pierwszej linii i dane. */
+  def cmdData(line : String, timeoutMs : Long = CmdTimeoutMs) : (ListMap[String, String], Seq[String]) = {
+    val what = line.takeWhile(_ != ' ')
+    val head = cmd(line, timeoutMs)
     val n = head.get("n").flatMap(_.toIntOption)
-      .getOrElse(throw new HilDeviceError(label, None, s"dump: '$head' bez n="))
-    val entries = (0 until n).map { i =>
-      var line = Option.empty[String]
-      while (line.isEmpty) link.recvLine(CmdTimeoutMs) match {
-        case None                        => throw new HilDeviceError(label, None, s"dump: brak linii $i z $n")
+      .getOrElse(throw new HilDeviceError(label, None, s"$what: '$head' bez n="))
+    val data = (0 until n).map { i =>
+      var got = Option.empty[String]
+      while (got.isEmpty) link.recvLine(timeoutMs) match {
+        case None                        => throw new HilDeviceError(label, None, s"$what: brak linii $i z $n")
         case Some(l) if l.startsWith("#") => noteJunk(l)
-        case Some(l)                     => line = Some(l)
+        case Some(l)                     => got = Some(l)
       }
-      parseDumpLine(line.get).getOrElse(throw new HilDeviceError(label, None, s"dump: zla linia '${line.get}'"))
+      got.get
     }
-    val end = reply("dump", CmdTimeoutMs)
-    if (end != "ok end") throw new HilDeviceError(label, None, s"dump: po $n liniach '$end' zamiast 'ok end'")
-    entries
+    val end = reply(what, timeoutMs)
+    if (end != "ok end") throw new HilDeviceError(label, None, s"$what: po $n liniach '$end' zamiast 'ok end'")
+    (head, data)
+  }
+
+  /** Wiele komend jednolinijkowych naraz: najwyzej `window` w drodze, zeby
+    * odpowiedzi nie zapchaly bufora USB, kiedy host jeszcze nadaje (`load`
+    * bodzca to tysiace linii). Pierwszy `err` przerywa: wyjatek z numerem
+    * linii; pozostale odpowiedzi w drodze sa odczytywane i pomijane. */
+  def pipeline(lines : Seq[String], window : Int = 16, timeoutMs : Long = CmdTimeoutMs) : Seq[ListMap[String, String]] = {
+    lines.foreach(l => require(l.length <= LineMax && !l.exists(c => c == '\n' || c == '\r'), s"komenda '$l'"))
+    val out = scala.collection.mutable.ArrayBuffer[ListMap[String, String]]()
+    var sent = 0
+    var firstErr : Option[(Int, Int, String)] = None
+    while (out.size < sent || (firstErr.isEmpty && sent < lines.size)) {
+      while (firstErr.isEmpty && sent < lines.size && sent - out.size < window) {
+        link.send(lines(sent) + "\n"); sent += 1
+      }
+      val i = out.size
+      parseReply(lines(i), reply(lines(i).takeWhile(_ != ' '), timeoutMs)) match {
+        case Right(r) => out += r
+        case Left((c, m)) =>
+          if (firstErr.isEmpty) firstErr = Some((i, c, m))
+          out += ListMap.empty
+      }
+    }
+    firstErr.foreach { case (i, c, m) =>
+      throw new HilDeviceError(label, Some(c), s"linia $i '${lines(i).take(40)}...' -> err $c ${errName(c)}: $m")
+    }
+    out.toSeq
   }
 
   /** Wektory kontraktu i test wlasny roli; zwraca liczbe wektorow. */
