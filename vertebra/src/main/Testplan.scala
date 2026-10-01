@@ -178,20 +178,30 @@ object Instrument {
 // ---------------------------------------------------------------------
 case class StreamPortHandle(valid   : Bool,
                             ready   : Bool,
-                            payload : Bits,
+                            payload : Data,
                             isInput : Boolean,
                             name    : String)
 
 object StreamConformance {
+  /** Caly payload jako jedna wartosc do porownania: liscie w kolejnosci
+    * flatten. Nieobslugiwany typ liscia ma rzucic, nie byc pominiety -
+    * pominiety lisc to checker, ktory po cichu nie widzi zmiany. */
+  private def snap(d : Data) : Seq[BigInt] = d.flatten.map {
+    case b : Bool      => if (b.toBoolean) BigInt(1) else BigInt(0)
+    case v : BitVector => v.toBigInt
+    case e : SpinalEnumCraft[_] => BigInt(e.toEnum.position)
+    case x             => throw new IllegalArgumentException(
+      s"payloadStable: nieobslugiwany typ liscia ${x.getClass.getSimpleName} (${x.getName()})")
+  }.toList
 
   /** stream_payload_stable
     * Payload nie moze sie zmienic dopoki valid && !ready. */
   def payloadStable(cd : ClockDomain, p : StreamPortHandle) : Unit = fork {
-    var held : Option[BigInt] = None
+    var held : Option[Seq[BigInt]] = None
     while (true) {
       cd.waitSampling()
       if (p.valid.toBoolean && !p.ready.toBoolean) {
-        val now = p.payload.toBigInt
+        val now = snap(p.payload)
         held match {
           case Some(v) => assert(v == now,
             s"${p.name}: payload zmienil sie przy valid && !ready ($v -> $now)")

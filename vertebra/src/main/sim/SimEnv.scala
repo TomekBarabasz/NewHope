@@ -61,3 +61,14 @@ object SimEnv {
     if (waves) c.withFstWave else c
   }
 }
+
+object SimSeed {
+  private val mode = sys.env.get("SIM_SEED").orElse(sys.props.get("sim.seed"))
+
+  /** Ziarno scenariusza: stale (hash nazwy), losowe albo podane z zewnatrz. */
+  def apply(simName: String): Int = mode match {
+    case None           => simName.hashCode & 0x7fffffff
+    case Some("random") => scala.util.Random.nextInt(Int.MaxValue)
+    case Some(s)        => s.toInt
+  }
+}

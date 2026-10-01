@@ -5,8 +5,7 @@ import spinal.core.sim._
 import spinal.lib.sim._
 import scala.collection.mutable
 import scala.util.Random
-import newhope.vertebra.{Stage, Testpoint, TestplanSuite,
-                         Instrument, StreamConformance, StreamPortHandle}
+import newhope.vertebra._
 import newhope.vertebra.sim.SimBackend
 
 // =====================================================================
