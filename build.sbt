@@ -132,6 +132,10 @@ lazy val uartdemo = (project in file("uart_demo"))
   .dependsOn(vertebra, mimas_v2)
   .settings(hwSettings)
 
+lazy val front_end = (project in file("front_end"))
+  .dependsOn(vertebra)
+  .settings(hwSettings)
+
 // ---------------------------------------------------------------------
 //  vertebra-hil: weryfikacja IP na sprzecie (vertebra-hil.md)
 // ---------------------------------------------------------------------
@@ -140,7 +144,7 @@ lazy val uartdemo = (project in file("uart_demo"))
   * symulacje harnessu moga biec rownolegle. Zaleznosc od IP (i2s) dochodzi
   * w etapie 2. */
 lazy val hilFpga = (project in file("vertebra-hil/fpga"))
-  .dependsOn(vertebra, mimas_v2, i2s % "compile->compile;test->test", i2c)
+  .dependsOn(vertebra, mimas_v2, i2s % "compile->compile;test->test", i2c, front_end)
   .settings(hwSettings, name := "vertebra-hil-fpga")
 
 /** Orkiestrator PC: porty szeregowe, suity hw_*. Kod nie jest sprzetem,
