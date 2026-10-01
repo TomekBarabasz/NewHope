@@ -470,7 +470,6 @@ class I2cSlaveTestplan extends TestplanSuite {
     var rxPort : StreamPortHandle = null
 
     lazy val dut : SimCompiled[I2cLoopback] = Config.sim
-      .withFstWave
       .workspaceName(s"${planLabel}_${cfgName}_${SimBackend.default.label}")
       .compile {
         val d = I2cLoopback(g)

@@ -80,7 +80,6 @@ class BinToBcdTestplan extends TestplanSuite {
   for (Cfg(cfgName, binWidth, bcdDigits) <- configs) {
 
     lazy val dut : SimCompiled[BinToBcd] = Config.sim
-      .withFstWave
       .workspaceName(s"bintobcd_${cfgName}_${SimBackend.default.label}")
       .compile { BinToBcd(binWidth, bcdDigits) }
 

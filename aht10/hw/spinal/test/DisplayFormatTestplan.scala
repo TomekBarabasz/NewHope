@@ -46,7 +46,6 @@ class DisplayFormatTestplan extends TestplanSuite {
 
   // -------------------------------------------------------------------
   lazy val dut : SimCompiled[DisplayFormat] = Config.sim
-    .withFstWave
     .workspaceName(s"displayformat_${SimBackend.default.label}")
     .compile { DisplayFormat() }
 

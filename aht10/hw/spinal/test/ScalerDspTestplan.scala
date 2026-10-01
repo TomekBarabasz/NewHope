@@ -91,7 +91,6 @@ class ScalerDspTestplan extends TestplanSuite {
 
   // -------------------------------------------------------------------
   lazy val dut : SimCompiled[ScalerDsp] = Config.sim
-    .withFstWave
     .workspaceName(s"scalerdsp_${SimBackend.default.label}")
     .compile { ScalerDsp() }
 

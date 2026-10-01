@@ -318,7 +318,6 @@ class I2sSlaveTestplan extends TestplanSuite {
     var txPort : StreamPortHandle = null
 
     lazy val dut : SimCompiled[I2sSlave] = Config.sim
-      .withFstWave
       .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
       .compile {
         val d = I2sSlave(g)
@@ -739,7 +738,6 @@ class I2sPairTestplan extends TestplanSuite {
 
   for ((name, gm) <- pairs) {
     lazy val dut = Config.sim
-      .withFstWave
       .workspaceName(s"i2s_pair_${name}_${SimBackend.default.label}")
       .compile(I2sPair(gm, I2sSlaveGenerics(gm.width)))
 

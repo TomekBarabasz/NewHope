@@ -90,7 +90,6 @@ class SevenSegMuxTestplan extends TestplanSuite {
   for (Cfg(cfgName, frameRate, blank) <- configs) {
 
     lazy val dut : SimCompiled[SevenSegMux] = Config.sim
-      .withFstWave
       .workspaceName(s"sevenseg_${cfgName}_${SimBackend.default.label}")
       .compile { SevenSegMux(100 MHz, frameRate, blank) }
 

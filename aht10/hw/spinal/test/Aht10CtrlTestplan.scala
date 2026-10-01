@@ -91,7 +91,6 @@ class Aht10CtrlTestplan extends TestplanSuite {
   val g = I2cGenerics(clkFrequency = 100 MHz, sclFrequency = 5 MHz)
 
   lazy val dut : SimCompiled[Aht10Ctrl] = Config.sim
-    .withFstWave
     .workspaceName(s"aht10ctrl_${SimBackend.default.label}")
     .compile { Aht10Ctrl(g, ag) }
 

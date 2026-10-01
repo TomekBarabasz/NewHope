@@ -277,7 +277,6 @@ abstract class I2cMasterTestplan(label : String,
     var cmdPort : StreamPortHandle = null
 
     lazy val dut : SimCompiled[I2cMaster] = Config.sim
-      .withFstWave
       .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
       .compile {
         val d = I2cMaster(g, build)

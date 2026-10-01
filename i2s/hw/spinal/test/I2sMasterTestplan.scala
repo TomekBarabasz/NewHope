@@ -417,7 +417,6 @@ class I2sMasterTestplan extends TestplanSuite {
     var txPort : StreamPortHandle = null
 
     lazy val dut : SimCompiled[I2sMaster] = Config.sim
-      .withFstWave
       .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
       .compile {
         val d = I2sMaster(g)

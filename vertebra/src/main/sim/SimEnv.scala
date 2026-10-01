@@ -56,8 +56,18 @@ object SimEnv {
     * alias wavesOn w sbt), a val zamrozilby wartosc przy inicjalizacji. */
   def waves : Boolean = truthy(sys.env.get("VERTEBRA_WAVES")) || truthy(sys.props.get("vertebra.waves"))
 
-  def apply(spinal : SpinalConfig, workspace : String = "simWorkspace") : SpinalSimConfig = {
-    val c = SimConfig.withConfig(spinal).workspacePath(workspace)
+  /** Jedyne wejscie do symulacji. Backend i etykieta workspace'u pochodza
+    * z tej samej wartosci, wiec przebiegi nie trafia do katalogu z nazwa
+    * innego backendu niz ten, ktory faktycznie chodzil.
+    * Workspace: simWorkspace/<name>_<backend> wzgledem katalogu projektu. */
+  def apply(spinal  : SpinalConfig,
+            name    : String = "simWorkspace",
+            backend : SimBackend = SimBackend.default) : SpinalSimConfig = {
+    import SimBackendOps._
+    val c = SimConfig.withConfig(spinal)
+      .workspacePath("simWorkspace")
+      .workspaceName(s"${name}_${backend.label}")
+      .withBackend(backend)
     if (waves) c.withFstWave else c
   }
 }

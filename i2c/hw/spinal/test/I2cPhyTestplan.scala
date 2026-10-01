@@ -6,7 +6,7 @@ import spinal.lib.sim._
 import scala.collection.mutable
 import scala.util.Random
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
-import newhope.vertebra.sim.SimBackend
+import newhope.vertebra.sim.{SimBackend,SimEnv}
 
 // =====================================================================
 //  JEDYNA suita testowa I2cPhy. Zbudowana na testpointach z OpenTitan
@@ -175,11 +175,8 @@ abstract class I2cPhyTestplan(label : String,
   )
 
   for (Cfg(cfgName, g) <- configs) {
-
-    lazy val dut : SimCompiled[I2cPhyBase] = Config.sim
-      .withFstWave
-      .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
-      .compile { build(g) }
+    
+    lazy val dut : SimCompiled[I2cPhyBase] = SimEnv(Config.spinal, s"${label}_${cfgName}").compile{build(g)}
 
     /** Jeden testpoint w jednej konfiguracji. `name` MUSI istniec w
       * planie - inaczej lookup rzuci juz przy konstrukcji suity, zanim
