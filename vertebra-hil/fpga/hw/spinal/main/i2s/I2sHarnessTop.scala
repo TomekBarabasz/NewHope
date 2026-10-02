@@ -38,10 +38,11 @@ case class I2sHarnessTop(v : I2sHilVariant,
   noIoPrefix()
 
   // --- sys: pin -> BUFG jawnie -------------------------------------------
-  // Pin GCLK (V10) zasila tylko dedykowane sciezki: CLKIN DCM i ten BUFG.
-  // Wszystko inne, w tym PROGCLK DCM, bierze zegar z sieci globalnej.
-  // Gdy PROGCLK wisial wprost na pinie, PAR stawial BUFG w miejscu bez
-  // szybkiej sciezki z V10 (Place:1108).
+  // Pin GCLK (V10) ma jednego odbiorce: ten BUFG. DCM (CLKIN i PROGCLK),
+  // harness i POR biora zegar z sieci globalnej sys_clk. Pin zasilajacy
+  // naraz CLKIN DCM i BUFG dawal Place:1108: PAR nie mial pary IOB/BUFGMUX
+  // z szybka sciezka dla obu odbiorcow. CLKIN z BUFG jest w Spartan-6
+  // dozwolony, kosztem odrobiny jittera na wejsciu DCM.
   val sysBufg = Bufg()
   sysBufg.io.I := io.clk
   val sys_clk = Bool()
@@ -58,7 +59,7 @@ case class I2sHarnessTop(v : I2sHilVariant,
 
   // --- dut: DCM_CLKGEN -> BUFG ---------------------------------------------
   val dcm = DcmClkGen(dcmM, dcmD, 1e9 / bg.clkHz)
-  dcm.io.CLKIN     := io.clk
+  dcm.io.CLKIN     := sys_clk
   dcm.io.RST       := False
   dcm.io.FREEZEDCM := False
   // PROGCLK = zegar sys z BUFG: DcmProgrammer w harnessie pracuje w tej domenie.
