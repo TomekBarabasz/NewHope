@@ -74,10 +74,10 @@ Pojemności (PSRAM 8 MB, N16R8): bodziec do 262 144 słów (ok. 16 s przy 16 kHz
 `stat`:
 
 ```
-ok sent=<ramki bodźca oddane do DMA> frames=<ramki odebrane> bad=0 gaps=0 relocks=0 lock_at=-1 first_err=- overflow=<przepełnienia DMA RX> stim=<słowa bodźca> stim_sum=<suma u32 słów, hex> rec=<ramki nagrane> rec_max=<pojemność>
+ok sent=<ramki bodźca oddane do DMA> frames=<ramki odebrane> bad=0 gaps=0 relocks=0 lock_at=-1 first_err=- overflow=<przepełnienia DMA RX> stim=<słowa bodźca> stim_sum=<suma u32 słów, hex> rec=<ramki nagrane> rec_max=<pojemność> preload=<ramki bodźca w DMA przed startem> preload_err=<- albo kod ESP-IDF>
 ```
 
-Pola checkera wzorca (`bad`…`first_err`) mają stałe wartości, bo tu ocenia host. `stim_sum` pozwala hostowi sprawdzić, że bodziec doszedł cały. `dump` zwraca `ok n=0`, `ok end`.
+Pola checkera wzorca (`bad`…`first_err`) mają stałe wartości, bo tu ocenia host. `stim_sum` pozwala hostowi sprawdzić, że bodziec doszedł cały. `preload` to ramki bodźca załadowane do DMA TX przed włączeniem kanału (normalnie 8 × 240 = 1920). Mniej albo `preload_err` różne od `-` oznacza, że przed bodźcem wyszły zera z pustego DMA, czyli bodziec zaczyna się później niż `MaxLead` ramek (`FeCheck`: „rozbieg nadawania ESP32”). `dump` zwraca `ok n=0`, `ok end`.
 
 `selftest`: pętla wewnętrzna na pinach pętli (`../i2s/commands.md`). I2S0 jest masterem przy 16 kHz z DIN = DOUT, przez kontroler przechodzi 4096 słów xorshift32 i nagranie musi zawierać je w ciągu, z `R = ~L`. To sprawdza pakowanie ramek 32/32, DMA i nagrywanie do PSRAM bez FPGA. Odpowiedź to `ok vectors=0` (FE nie ma wektorów kontraktu).
 

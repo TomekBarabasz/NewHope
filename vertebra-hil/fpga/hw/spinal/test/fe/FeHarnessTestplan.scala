@@ -314,6 +314,14 @@ class FeHarnessTestplan extends TestplanSuite {
     info(f"FeCheck: ${raw.size} ramek w $sec%.1f s")
     assert(rep.ok && rep.frames.size == raw.size, rep.errors.mkString("; "))
     assert(sec < 20, f"FeCheck za wolny: $sec%.1f s")
+    // Diagnoza N0: bodziec spozniony o 300 ramek zer (rozbieg DMA ESP32)
+    val late = List.fill(300)(0L) ++ xs.take(2000)
+    val gl   = newhope.frontend.DcGolden.run(mv.fe.dc, late).y
+    val rawL = late.indices.map(k => FeFrame.encode(FeFrame.Out(k & FeFrame.IdxMask, late(k), gl(k), k == 0, false, false), sw)).toList
+    val repL = FeCheck.analyze(mv, big.take(2000), rawL)
+    info(s"spozniony bodziec: ${repL.errors.mkString("; ")}")
+    assert(repL.errors.size == 1 && repL.errors.head.contains("zaczyna sie od ramki 300") &&
+           repL.errors.head.contains("rozbieg"), repL.errors.mkString("; "))
     assert(FeFrame.micSample(FeStimulus.word(FeStimulus.MicMin, 0xFF), sw) == -(1L << (sw - 1)))
     assert(FeFrame.micSample(FeStimulus.word(0x00003F, 0xFF), sw) == 0, "bity [5:0] slowa 24 odrzucone")
   }

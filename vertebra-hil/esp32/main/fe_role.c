@@ -79,6 +79,8 @@ static int s_ntasks;
 static SemaphoreHandle_t s_done;
 static uint32_t s_pos;                      /* nastepne slowo bodzca */
 static volatile uint64_t s_sent;            /* ramki bodzca oddane do DMA */
+static uint32_t s_preload;                  /* ramki bodzca w DMA przed startem TX */
+static esp_err_t s_preload_err;             /* pierwszy blad i2s_channel_preload_data */
 static volatile uint32_t s_overflow;
 static bool s_record;
 static uint32_t s_tx_buf[2 * DMA_FRAMES];
@@ -233,19 +235,26 @@ static int run_begin(const hil_stim_t *st, hil_rec_t *r, char *msg, size_t len)
     TRY(i2s_channel_enable(s_rxh));
     xTaskCreatePinnedToCore(rx_task, "fe_rx", 4096, r, 10, NULL, 0);
     s_ntasks++;
+    s_preload = 0;
+    s_preload_err = ESP_OK;
     for (;;) {
         size_t loaded = 0;
         uint32_t before = s_pos;
         uint32_t from = hil_stim_fill(st, &s_pos, s_tx_buf, DMA_FRAMES);
-        i2s_channel_preload_data(s_txh, s_tx_buf, CHUNK_BYTES, &loaded);
+        esp_err_t pe = i2s_channel_preload_data(s_txh, s_tx_buf, CHUNK_BYTES, &loaded);
+        if (pe != ESP_OK && s_preload_err == ESP_OK) {
+            s_preload_err = pe;             /* do stat: bodziec pojdzie dopiero z tx_task, po zerach z DMA */
+        }
         uint32_t took = (uint32_t)(loaded / FRAME_BYTES);
         /* niezaladowana reszta pojdzie jeszcze raz z tx_task */
         if (took < DMA_FRAMES) {
             s_pos = before + (took < from ? took : from);
             s_sent += took < from ? took : from;
+            s_preload += took < from ? took : from;
             break;
         }
         s_sent += from;
+        s_preload += from;
     }
     TRY(i2s_channel_enable(s_txh));
     xTaskCreatePinnedToCore(tx_task, "fe_tx", 4096, (void *)st, 10, NULL, 0);
@@ -318,9 +327,10 @@ static void role_stat(char *out, size_t len)
 {
     snprintf(out, len,
              "sent=%" PRIu32 " frames=%" PRIu32 " bad=0 gaps=0 relocks=0 lock_at=-1 first_err=- overflow=%" PRIu32
-             " stim=%" PRIu32 " stim_sum=%08" PRIx32 " rec=%" PRIu32 " rec_max=%" PRIu32,
+             " stim=%" PRIu32 " stim_sum=%08" PRIx32 " rec=%" PRIu32 " rec_max=%" PRIu32 " preload=%" PRIu32 " preload_err=%s",
              s_have_run ? (uint32_t)s_sent : 0u, s_have_run ? (uint32_t)s_rec.seen : 0u,
-             s_have_run ? s_overflow : 0u, s_stim.n, s_stim.sum, s_have_run ? s_rec.n : 0u, s_rec.cap);
+             s_have_run ? s_overflow : 0u, s_stim.n, s_stim.sum, s_have_run ? s_rec.n : 0u, s_rec.cap,
+             s_have_run ? s_preload : 0u, s_have_run && s_preload_err != ESP_OK ? esp_err_to_name(s_preload_err) : "-");
 }
 
 static int role_dump_count(void) { return 0; }

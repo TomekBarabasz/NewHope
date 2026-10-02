@@ -29,6 +29,8 @@ object FeCheck {
   val MaxLead = 16
   /** Ramki powrotne, ktore moze zjesc jeden reset DUT-a (ramka w toku + przycieta). */
   val MaxLostAtReset = 2
+  /** Jak daleko szukac poczatku bodzca przy diagnozie (8 buforow DMA ESP32 + zapas). */
+  val MaxSearch = 4096
 
   case class Report(frames : Seq[FeFrame.Out], lost : Int, lead : Option[Int], resets : Int, bypassed : Int,
                     maxFloatErr : Double, info : Seq[String], errors : Seq[String]) {
@@ -121,13 +123,30 @@ object FeCheck {
         inf += s"N0: bodziec od ramki $k, $seen z ${exp.size} slow zgodnych (x == slowo >> ${FeFrame.SlotBits - sw})"
         if (seen < exp.size && resets == 0) err(s"N0: nagranie urywa sie po $seen z ${exp.size} slow bodzca")
       case None =>
-        // pierwsza niezgodnosc przy najlepszym przesunieciu, do komunikatu
-        val k = (0 to scala.math.min(MaxLead, first.size)).maxBy(k =>
-          first.indices.drop(k).takeWhile(i => i - k < exp.size && first(i).x == exp(i - k)).size)
-        val i = first.indices.drop(k).find(i => if (i - k < exp.size) first(i).x != exp(i - k) else first(i).x != 0)
-        err(s"N0: echo x nie pasuje do bodzca przy zadnym przesunieciu <= $MaxLead; najlepsze $k, " +
-            i.fold("?")(i => s"ramka $i: x ${first(i).x}, oczekiwane ${if (i - k < exp.size) exp(i - k) else 0L}" +
-                             (if (i - k < stim.size) f" (slowo ${stim(i - k)}%08x)" else " (po koncu bodzca)")))
+        // Diagnoza: gdzie naprawde zaczyna sie bodziec (szukane dalej niz
+        // MaxLead) i co bylo przed nim - zera z pustego DMA ESP32 to rozbieg
+        // partnera, a nie blad N0.
+        val far = (0 until scala.math.min(first.size, MaxSearch)).find(k => k > MaxLead && matches(k))
+        val pre = (k : Int) => first.take(k).map(_.x)
+        far match {
+          case Some(k) =>
+            val zeros = pre(k).count(_ == 0)
+            err(s"N0: bodziec zaczyna sie od ramki $k (dozwolone <= $MaxLead); przed nim $zeros zer i " +
+                s"${k - zeros} innych wartosci (${pre(k).filter(_ != 0).take(4).mkString(", ")}); " +
+                s"od ramki $k echo x zgodne z bodzcem w calosci" +
+                (if (zeros == k) " - same zera: rozbieg nadawania ESP32 (DMA), nie N0" else ""))
+          case None =>
+            // pierwsza niezgodnosc przy najlepszym przesunieciu, do komunikatu
+            val k = (0 to scala.math.min(MaxLead, first.size)).maxBy(k =>
+              first.indices.drop(k).takeWhile(i => i - k < exp.size && first(i).x == exp(i - k)).size)
+            val i = first.indices.drop(k).find(i => if (i - k < exp.size) first(i).x != exp(i - k) else first(i).x != 0)
+            val nz = first.indexWhere(_.x != 0)
+            err(s"N0: echo x nie pasuje do bodzca przy zadnym przesunieciu <= $MaxSearch; najlepsze $k, " +
+                i.fold("?")(i => s"ramka $i: x ${first(i).x}, oczekiwane ${if (i - k < exp.size) exp(i - k) else 0L}" +
+                                 (if (i - k < stim.size) f" (slowo ${stim(i - k)}%08x)" else " (po koncu bodzca)")) +
+                s"; pierwsze niezerowe x w ramce $nz: ${first.slice(nz, nz + 4).map(_.x).mkString(", ")}, " +
+                s"bodziec zaczyna sie od ${exp.take(4).mkString(", ")}")
+        }
     }
 
     // --- 6. okno bypassu -----------------------------------------------------
