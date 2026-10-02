@@ -35,9 +35,6 @@ typedef struct {
 static inline bool hil_frame_silent(hil_frame_t f) { return f.l == 0 && f.r == 0; }
 static inline bool hil_frame_eq(hil_frame_t a, hil_frame_t b) { return a.l == b.l && a.r == b.r; }
 
-/* Jeden krok xorshift32 (13, 17, 5). */
-uint32_t hil_xorshift32(uint32_t x);
-
 /* S = min(8, W/2 - 1); -1, gdy W poza [8, 32]. */
 int hil_seq_bits(int w);
 

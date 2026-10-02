@@ -7,7 +7,7 @@
 
 #include <string.h>
 
-uint32_t hil_xorshift32(uint32_t x)
+static uint32_t hil_xorshift32(uint32_t x)
 {
     x ^= x << 13;
     x ^= x >> 17;
