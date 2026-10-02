@@ -819,6 +819,20 @@ Firmware ESP32 i okablowanie są te same co w §12.
 - Symulacja: `hilFpga/test` 105/105 (I2S + FE, w tym N4 na Verilatorze). Host na atrapach zielony.
 - **Płytka (`mimas_n4`): `FeHilTestplan` zielony**, czyli `hw_fe_*` (N0 + N1 na układzie v2) i `hw_n4_chain`/`hw_n4_reset`. Każda weryfikowalna ramka widma ma CRC zgodne z `FftGolden` na N2, N3 i N4, a zrzuty N4 są zgodne prążek po prążku. Pośrednio potwierdza to też, że zawartość pamięci z `$readmemb` (okno Hanna, twiddle, ROM rozplatania) trafiła do bitstreamu poprawnie, mimo ostrzeżenia ISE o inicjalizacji RAMB8 (`PhysDesignRules:2410`, AR 39999).
 
+`hw_n4_chain` (`-Dsamples` domyślne, 10^5 próbek mowy, `dump_every` 16), bitstream `dafe2d30-dirty`, firmware `dafe2d30`:
+
+| Wielkość | Wartość |
+| --- | --- |
+| Ramki wyniku FPGA / nagranie | 103 972 / 103 972, 0 zgubionych |
+| N0, N1 | 100 000 / 100 000 słów bodźca zgodnych, `max \|y − float\|` = 0,581 LSB |
+| Ramki widma (`n4_frames` = golden) | 649 |
+| Nieweryfikowalne (pierścień sprzed biegu) | 3 (pierwsze trzy, zgodnie z modelem) |
+| Rekordy CRC zgodne na N2, N3, N4 | 642, czyli wszystkie weryfikowalne poza 4 z końcówki nagrania (rekordy w kolejce przy stop) |
+| Zrzuty N4 zgodne prążek po prążku | 40 / 40 (`n4_dump` = 40) |
+| `n4_aux_drop`, `n4_order`, `fr_overrun`, `overflow`, `dc_overrun` | 0 |
+| ESP32 | `overflow` 0, `preload` 1920, bez błędu preloadu |
+| Czasy | `load` 10^5 słów 2,7 s, bieg ok. 6,5 s, `rec` 104 400 ramek 2,6 s, całość 13,8 s |
+
 **ISE 14.7, `FeHarnessTop_mimas_n4`, XC6SLX9-3CSG324 (po trasowaniu, 0 błędów timingu):**
 
 | Zasób | Zajęte | % | `mimas` (N0 + N1) |
@@ -844,7 +858,6 @@ Wnioski:
 
 Zostaje:
 
-- liczby z przebiegu na płytce (liczba ramek zweryfikowanych i nieweryfikowalnych, zrzuty, czasy) do tabeli jak w §12;
 - przebudowa `mimas` (v2) i powtórzenie §12;
 - decyzja o `Framer` (zerowanie pierścienia po resecie) i o rejestrze BRAM → DSP w `FftCore`.
 
