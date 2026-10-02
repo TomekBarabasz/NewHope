@@ -16,9 +16,14 @@ import HilProtocol._
 //
 //  Host: stop -> czeka na status.snapshot -> czyta liczniki. Start kasuje
 //  `ready`; migawka zostaje do nastepnego stop.
+//
+//  `names`: uklad slow od Counters.Base. Domyslnie wspolny uklad checkera
+//  wzorca (I2S); IP bez checkera wzorca podaje wlasny (FeHilRegs.counters).
 // =====================================================================
-case class HilCounters(sysCd : ClockDomain, dutCd : ClockDomain) extends Component {
-  val n = Counters.names.size
+case class HilCounters(sysCd : ClockDomain, dutCd : ClockDomain,
+                       names : Seq[String] = Counters.names) extends Component {
+  require(names.size <= Counters.Size, s"${names.size} licznikow, blok ma ${Counters.Size} slow")
+  val n = names.size
 
   val io = new Bundle {
     val bus      = slave(HilRegBus())                 // sys

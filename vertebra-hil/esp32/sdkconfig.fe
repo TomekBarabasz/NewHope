@@ -1,0 +1,14 @@
+# vertebra-hil: firmware frontendu N0 + N1 (contract/fe/commands.md).
+# Dokladany do sdkconfig.defaults:
+#   cd vertebra-hil/esp32
+#   idf.py -B build-fe -D SDKCONFIG=build-fe/sdkconfig \
+#          -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.fe" build flash
+# Osobny katalog i sdkconfig, zeby build I2S (build/, sdkconfig) zostal bez zmian.
+CONFIG_HIL_IP_FE=y
+
+# PSRAM oktalny 8 MB (N16R8): bodziec i nagranie. Tylko jawny przydzial
+# (heap_caps_malloc MALLOC_CAP_SPIRAM), zeby DMA i stosy zostaly w SRAM.
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_CAPS_ALLOC=y

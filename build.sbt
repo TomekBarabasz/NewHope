@@ -144,13 +144,14 @@ lazy val front_end = (project in file("front_end"))
   * symulacje harnessu moga biec rownolegle. Zaleznosc od IP (i2s) dochodzi
   * w etapie 2. */
 lazy val hilFpga = (project in file("vertebra-hil/fpga"))
-  .dependsOn(vertebra, mimas_v2, i2s % "compile->compile;test->test", i2c, front_end)
+  .dependsOn(vertebra, mimas_v2, i2s % "compile->compile;test->test", i2c,
+             front_end % "compile->compile;test->test")   // DcGolden w FeCheck
   .settings(hwSettings, name := "vertebra-hil-fpga")
 
 /** Orkiestrator PC: porty szeregowe, suity hw_*. Kod nie jest sprzetem,
   * wiec uklad katalogow jak w vertebrze. Jedno stanowisko -> testy szeregowo. */
 lazy val hil = (project in file("vertebra-hil/host"))
-  .dependsOn(vertebra, hilFpga)
+  .dependsOn(vertebra, hilFpga % "compile->compile;test->test")   // test: FeCheck, FeStimulus
   .settings(
     name := "vertebra-hil-host",
     srcLayout,

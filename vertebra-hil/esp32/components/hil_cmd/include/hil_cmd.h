@@ -46,6 +46,20 @@ typedef struct {
 } hil_key_t;
 
 /*
+ * Komenda roli (contract/commands.md, "Komendy roli"), np. `load` i `rec`
+ * frontendu. `fn` dostaje caly argv (argv[0] = nazwa) i:
+ *   - zwraca 0, gdy SAMA wyslala odpowiedz (hil_cmd_ok, ewentualnie linie
+ *     hil_cmd_data i hil_cmd_ok(" end")),
+ *   - albo zwraca kod `err` z opisem w `msg` i NIC nie wysyla.
+ * `stopped_only`: w trakcie biegu hil_cmd odpowiada err 4 bez wywolania.
+ */
+typedef struct {
+    const char *name;
+    bool stopped_only;
+    int (*fn)(int argc, char **argv, char *msg, size_t len);
+} hil_role_cmd_t;
+
+/*
  * Rola IP. Funkcje zwracaja 0 albo kod `err`; opis bledu wpisuja do `msg`.
  * `values` to tablica wartosci kluczy (indeks jak w `keys`), wlasnosc roli;
  * hil_cmd zapisuje ja tylko w stanie stop i tylko po udanym `validate`.
@@ -67,6 +81,9 @@ typedef struct {
     void (*dump_line)(int i, char *out, size_t len);
     /* Test wlasny roli (wektory + petla wewnetrzna); `vectors` = liczba. */
     int (*selftest)(int *vectors, char *msg, size_t len);
+    /* Komendy roli; NULL / 0 = brak. */
+    const hil_role_cmd_t *cmds;
+    int ncmds;
 } hil_role_t;
 
 /* ---- rdzen protokolu (hil_cmd_core.c, bez ESP-IDF, testowany na PC) ---- */
@@ -79,6 +96,16 @@ void hil_cmd_init(const hil_role_t *role, const char *build, hil_write_fn write)
 /* Jedna linia komendy bez '\n' ('\r' na koncu jest pomijane). Zapisuje
  * dokladnie jedna linie odpowiedzi (dump: n + 2). Pusta linia: nic. */
 void hil_cmd_line(char *line);
+
+/* Dla komend roli: linia "ok<tekst>" (tekst zaczyna sie od spacji albo
+ * jest pusty) i surowa linia danych. */
+void hil_cmd_ok(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
+void hil_cmd_data(const char *line);
+
+/* Argumenty klucz=wartosc komendy roli: `vals[i]` dla `keys[i]` (NULL, gdy
+ * nie podano). Nieznany klucz: HIL_ERR_UNKNOWN_KEY, powtorzony albo bez
+ * '=': HIL_ERR_RANGE; opis w msg. `keys` zakonczone NULL, najwyzej 8. */
+int hil_cmd_args(int argc, char **argv, const char *const *keys, const char **vals, char *msg, size_t len);
 
 /* Linia dluzsza niz HIL_LINE_MAX: odpowiedz bledem zamiast wykonania. */
 void hil_cmd_line_too_long(void);

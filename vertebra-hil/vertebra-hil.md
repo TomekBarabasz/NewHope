@@ -103,10 +103,13 @@ NewHope/
   vertebra-hil/
     contract/                       commands.md: transport, ramki, wspólne rejestry (etap 1)
       i2s/                          pattern.md, commands.md (cfg, ip_id, blok 0x100), vectors/ (etap 1)
+      fe/                           commands.md: frontend N0 + N1, ramki, load/rec (§12)
       i2c/                          jw. dla I2C, później
     fpga/                           sbt: hilFpga (hwSettings)
       hw/spinal/main/               Config, HilEchoTop (etap 0); HilProtocol, HilRegBus, HilUartBridge (HilCore, HilCoreRegs), HilCoreTop (2a)...
       hw/spinal/main/i2s/           I2sPattern, I2sCheckerModel, I2sVectors (etap 1); I2sHilRegs, I2sPatternGen/Check, I2sHarness (etap 2)
+      hw/spinal/main/fe/            FeHilRegs (FeHilVariant, FeFrame), FeHarness, FeHarnessTop (§12)
+      hw/spinal/test/fe/            FeCheck, FeStimulus, FeHarnessTestplan (§12)
       hw/spinal/test/               HilEchoTopTestplan (etap 0)
       hw/spinal/test/i2s/           I2sContractTestplan (etap 1), I2sHarnessTestplan
       hw/gen/        (gitignore)    Verilog ze Spinala
@@ -117,10 +120,12 @@ NewHope/
       src/main/i2s/                 SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4); I2sDiag (etap 5)
       src/test/                     HilHostTestplan, HilFakes, FakeI2sBus: host na atrapach płytek (etapy 4-5)
       src/test/i2s/                 I2sHilTestplan (etap 4)
+      src/main/fe/, src/test/fe/    FeHil; FeHilTestplan, FakeFeBus (§12)
     esp32/                          ESP-IDF (CMake), poza sbt
       CMakeLists.txt, sdkconfig.defaults
-      main/                         main.c, i2s_role.c, Kconfig.projbuild (piny) (etap 3)
-      components/hil_cmd, hil_pattern
+      main/                         main.c, i2s_role.c, Kconfig.projbuild (piny) (etap 3); fe_role.c (§12)
+      components/hil_cmd, hil_pattern, hil_stream (§12)
+      sdkconfig.fe                  rola FE + PSRAM (§12)
       test/                         Makefile: hil_pattern i rdzen hil_cmd na PC, gcc (etap 3)
       echo/                         etap 0: echo USB-Serial-JTAG, osobny projekt
     tools/                          flashowanie Mimas V2 (XMODEM), notatki o VM z ISE
@@ -636,6 +641,124 @@ Otwarte pytania:
 - [x] Zajętość XC6SLX9 z oboma DUT-ami: mieści się, `v32_32` 79 % slice'ów (§10, wyniki etapu 2).
 - [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
 - [ ] Kandydat na partnera zapasowego, gdyby S3 slave okazał się niewiarygodny.
+
+## 12. Frontend N0 + N1 (I2S RX z INMP441 i filtr DC)
+
+Drugie IP na stanowisku, przed I2C. DUT to `MicFrontEnd` z `front_end`: N0 `I2sMicRx` (master I2S, 75 MHz / 73 / 64 = 16 053 Hz, lewy kanał, `słowo24[23:6]`) i N1 `DcFilter` (`y = x − x1 + a·y1`, bez DSP). Kontrakt jest w `contract/fe/commands.md`.
+
+### Po co i co sprawdzamy
+
+- **N0 obcym krzemem.** ESP32-S3 jako slave udaje INMP441, więc `I2sMicRx` jest sprawdzany niezależną implementacją I2S, tak jak DUT-y I2S w §1. Obejmuje to opóźnienie o bit, wybór kanału, obcięcie do 18 bitów i prawdziwy SCK na pinach.
+- **N1 na krzemie, bit w bit.** Filtr to czysta arytmetyka w jednej domenie, więc ESP32 nie jest tu niezależną wyrocznią. Wyrocznią jest `DcGolden` na PC, ten sam co w `DcFilterTestplan`. HIL łapie różnice symulacja–synteza (`resize`, `>>` na SInt w ISE, wartości `init`, reset), zamyka timing przy 75 MHz (ostre `TS_dut` w `fe_harness.ucf`, zegar urządzenia) i daje długie strumienie.
+- `dc_golden_vs_float` na sprzęcie oznacza `max |y − float|` policzony na wyniku z krzemu (≤ 1 LSB w każdym biegu).
+
+### Tor danych
+
+```
+PC --load--> ESP32 PSRAM --SD_E2F--> I2sMicRx -> DcFilter -> (y, x) -> I2sSlave --SD_F2E--> ESP32 PSRAM --rec--> PC
+                         ^---- SCK/WS z I2sMicRx (FPGA master), ESP32 slave full duplex ----^
+```
+
+- **Bodziec** składa PC: `mic24 << 8 | śmieci8` w lewym slocie, `~L` w prawym. Firmware nie zna sygnałów, wgrywa go `load` do PSRAM.
+- **Wynik** wraca po I2S, a nie po UART. Strumień 16 kHz × 18 b przekracza UART 115200, a UART FPGA zajmuje most rejestrów. Nadajnik powrotny to `I2sSlave` z `newhope.i2s`, zegarowany wewnętrznym SCK/WS DUT-a, więc ESP32 odbiera na tym samym zegarze, na którym nadaje.
+- **Ramka wyniku** niesie `y`, echo `x` (próbkę N0, z której policzono `y`), `idx` mod 2^14, flagi `rst`, `bypass`, `overrun` i znacznik `0x5A5` (`FeFrame`). Golden liczony jest z `x`, a nie z bodźca, więc błąd transportu nie udaje błędu filtra. Osobno N0 sprawdza `x == L[31:14]`.
+- **Ocena:** `FeCheck` (`fpga/hw/spinal/test/fe/`) to ta sama funkcja w symulacji harnessu i na stanowisku, tak jak `I2sCheckerModel` dla I2S. Reset DUT-a dzieli strumień na odcinki od stanu zerowego, a przerwa w `idx` jest dozwolona tylko tuż przed flagą `rst`, bo reset ucina ramkę powrotną w toku.
+- **Stop:** migawka liczników, potem `tail` (512) próbek ciszy, które domykają bufory DMA ESP32, i dopiero na granicy ramki SCK staje. Bez tego ESP32 gubiło ostatnie ramki, a slave zostawał z połową ramki.
+- **Piny:** SCK/WS są wyjściami od pierwszego startu do soft resetu. Bitstream FE z ESP32 w roli master I2S nie powoduje konfliktu na linii.
+
+### Co doszło, a co jest wspólne
+
+| Warstwa | Wspólne bez zmian | Zmiana we wspólnym | Nowe (FE) |
+| --- | --- | --- | --- |
+| FPGA | `HilCore`, most, `HilRunRegs`, `HilResetInjector`, `DcmClkGen` | `HilCounters` dostaje układ liczników jako parametr; `HilBuildInfo` ma źródła per IP (`feSources`) | `FeHilRegs` (`FeHilVariant`, `FeFrame`, blok `0x100`), `FeHarness`, `FeHarnessTop`, `hw/fe_harness.ucf` |
+| ESP32 | transport, `hil_cmd` | komendy roli (`hil_role_cmd_t`, `hil_cmd_args`), addytywnie, proto bez zmian | `hil_stream` (bez ESP-IDF, testy gcc), `main/fe_role.c`, wybór IP w Kconfig, `sdkconfig.fe` (PSRAM) |
+| Host | `HilLink`, `HilBench`, `HilSuite`, `HilGit` | `HilFpgaMap.counterNames` / `toStat`; `EspDevice.cmdData` (odpowiedź z danymi) i `pipeline` (okno 16 linii, żeby odpowiedzi nie zapchały USB przy tysiącach `load`) | `FeHil` (`FeFpgaMap`, `FeEsp`), `FeHilTestplan`, `FakeFeBus` |
+
+Pierwszy wpis na liście refaktorów z §10 („Potem I2C”): liczniki 0x010– były układem checkera wzorca I2S, a FE ma własny układ. Rozwiązanie to parametr, bez abstrakcji.
+
+### Testy
+
+- `FeHarnessTestplan` (symulacja, `hilFpga`): rejestry, tor z bodźcem mowy, rogi (±FS co próbkę, skok, losowe słowa 32 b), okno bypassu, 3 resety DUT-a w strumieniu, stop/tail/soft reset, dymny test z prawdziwym dzielnikiem 73. ESP32 grają `I2sCodecModel` (bodziec) i `I2sPinRx` (nagranie). Wariant `d8` (dzielnik 8) skraca symulację 9×.
+- `FeHilTestplan` (stanowisko, `hil`): `hw_param_bounds`, `hw_link` (esp32, fpga), `hw_fe_chain` (V1, `fe_chain` + `dc_smoke`, domyślnie 10^5 próbek), `hw_fe_corners`, `hw_fe_removal` (+ `dc_golden_vs_float`), `hw_fe_bypass` (V2), `hw_fe_reset`, `hw_fe_long` (V3, cały bufor bodźca, `-Dlong=1`). Bez stanowiska wszystkie są *canceled*.
+- `HilHostTestplan.host_fe_on_fakes`: cała `FeHilTestplan` na atrapach (`FakeFeBus` składa nagranie z `DcGolden`), plus bieg z błędami (przekłamane `y`, złe echo `x`, zgubiona ramka) i sprawdzenie komunikatów.
+- `make -C vertebra-hil/esp32/test`: `hil_stream` (load, nadawanie, nagranie, linie `rec`, wyszukanie bodźca) i komendy roli w `hil_cmd`.
+
+Zostają w symulacji: `dc_min_spacing`, `dc_overrun`, `dc_latency` (cykle, a I2S daje próbkę co 4672 cykle) i bity I2S poza tym, co widać w echu `x` (`I2sMicRxTestplan`).
+
+### Budowanie i uruchamianie
+
+```
+# bitstream (Verilog do hw/gen, potem ISE z hw/fe_harness.ucf, programmer.py)
+sbt "hilFpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog"
+# firmware FE: osobny katalog i sdkconfig, build I2S zostaje nietkniety
+cd vertebra-hil/esp32
+idf.py -B build-fe -D SDKCONFIG=build-fe/sdkconfig -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.fe" build flash
+# testy
+sbt "hilFpga/testOnly *FeHarnessTestplan"                                   symulacja
+sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dsamples=20000 -Dlong=1"
+```
+
+Okablowanie i piny są te same co dla I2S (§9). Zmiana IP to inny bitstream i inny obraz ESP32; `HilBench` odrzuca płytkę z innym `ip=` z komunikatem, co wgrać.
+
+### Wyniki na płytce (2026-10-02)
+
+`sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`, bitstream `FeHarnessTop_mimas` (build `f950f9dc-dirty`), firmware FE `d719d9f2`. `testplan completeness` daje V1 3/3, V2 3/3 i V3 2/2; wszystkie testpointy są zielone, łącznie z `hw_fe_long`.
+
+| Bieg | Bodziec | Ramki FPGA | `max \|y − float\|` | Uwagi |
+| --- | --- | --- | --- | --- |
+| `hw_fe_chain` | mowa, 10^5 | 103 977 | 0,580 LSB | N0: 100 000 / 100 000 słów zgodnych, przesunięcie 0 |
+| `hw_fe_corners` square | ±FS co próbkę, 20 000 | 24 724 | 0,582 LSB | 19 999 nasyceń wyjścia zgodnych z golden |
+| `hw_fe_corners` step | skok −FS → +FS, 20 000 | 24 740 | 0,579 LSB | 32 nasycenia |
+| `hw_fe_corners` random | losowe 32 b, 20 000 | 24 775 | 0,577 LSB | 321 nasyceń |
+| `hw_fe_removal` | ton 200 Hz + 0,1 FS, 2 706 | 7 410 | 0,580 LSB | średnia ogona −0,311 LSB |
+| `hw_fe_bypass` | mowa, 33 333, okno [11 111, 22 222) | 37 256 | 0,581 LSB | 11 111 ramek w bypassie |
+| `hw_fe_reset` | mowa, 50 000, 10 resetów | 54 773 | 0,580 LSB | 18 ramek powrotnych zgubionych przy resetach (1,8 na reset), `underrun` 3 |
+
+- **Wszystkie biegi:** `y` jest bit w bit zgodne z `DcGolden` liczonym z echa `x`. `overflow` i `dc_overrun` FPGA są zerowe, przepełnień DMA ESP32 nie ma, a `sent` ESP32 jest równe długości bodźca. `underrun` nadajnika powrotnego wynosi 1 na bieg (rozbieg).
+- **N0:** echo `x` równa się `słowo >> 14` dla całego bodźca od pierwszej ramki. Opóźnienie o bit, lewy kanał i obcięcie do 18 bitów są zgodne z niezależnym I2S ESP32-S3.
+- **ESP32-S3 jako slave full duplex** przy BCLK 1,027 MHz i fs 16 053 Hz pracuje bez błędu wyrównania kanałów, także przy 10 przerwach SCK w `hw_fe_reset` (#9513, §11).
+- **Czasy:** `load` 10^5 słów zajmuje 2,4 s (okno 16 linii), `rec` 104 400 ramek 2,4 s, `selftest` 0,3 s, a `ver` 0,53 ms na komendę.
+- **Poprawka po pierwszym biegu:** `FeCheck` indeksował po `List`, co dawało O(n²) i ok. 90 s oceny przy 10^5 próbek (watchdog `HilProgress`). Teraz ocena idzie na `Vector`, a 262 144 ramki zajmują 0,8 s (`fe_harness_param_bounds` pilnuje limitu 20 s).
+- **Poprawka `hw_fe_removal`:** pierwotne kryterium średniej (`< 1 + reszta tonu`, czyli 33 LSB) było za luźne, bo 1000 próbek to niecała liczba okresów 200 Hz. Teraz średnia ogona ma się różnić o mniej niż 1 LSB od reszty samego tonu, policzonej tym samym filtrem w Double na `x` bez offsetu.
+
+**ISE 14.7, `FeHarnessTop_mimas`, XC6SLX9-3CSG324 (po trasowaniu, 0 błędów timingu):**
+
+| Zasób | Zajęte | % | Dla porównania I2S `v32_32` |
+| --- | --- | --- | --- |
+| Slice'y | 760 / 1 430 | 53 % | 79 % |
+| LUT-y | 2 330 / 5 720 | 40 % | 59 % |
+| Rejestry | 1 876 / 11 440 | 16 % | 23 % |
+| LUT-y jako RAM (kolejka do nadajnika powrotnego) | 44 | 3 % | — |
+| RAMB16 / RAMB8 | 0 / 0 | 0 % | RAMB8 1 |
+| DSP48A1 | 0 / 16 | 0 % | — |
+| BUFG, DCM_CLKGEN | 2, 1 | | |
+
+| Domena | Wymaganie | Minimalny okres | Zapas | Najdłuższa ścieżka |
+| --- | --- | --- | --- | --- |
+| `sys` | 10 ns | 7,677 ns | 2,32 ns | most: `addr` → `rdata` (jak w I2S, 5 poziomów logiki) |
+| `dut` | 13,333 ns (75 MHz) | 7,485 ns (133,6 MHz) | 5,85 ns | `HilResetInjector`: `timer` 32 b (12 poziomów logiki) |
+
+- **Filtr przy 75 MHz:** `DcFilter` nie ma najdłuższej ścieżki w domenie `dut`. Wszystkie jego ścieżki są krótsze niż 7,485 ns, więc zapas wobec 13,333 ns to co najmniej 5,85 ns, prawie 44 % okresu. Podział rekurencji na dwa takty (B, C) z README `front_end` wystarcza z dużym zapasem. Filtr nie używa DSP48A1, zgodnie z założeniem kontraktu dla N1.
+- **Miejsce na N2:** w bitstreamie FE zostaje ok. 47 % slice'ów i wszystkie 32 RAMB16. Okno Framera (512 próbek × 18 b) to 1–2 RAMB16, więc N2 zmieści się w tym samym harnessie.
+- **Ostrzeżenia mapy:** `Timing:3159` (DCM bez relacji fazy, domeny rozdziela TIG w UCF, tak samo jak w I2S) i `PhysDesignRules:367` (nieużywane wyjścia LUT-RAM kolejki `StreamFifo`). Żadne z nich nie dotyczy działania.
+
+Zostaje:
+- Bitstream FE z czystego drzewa (bez `-dirty`), żeby `HilBench` sprawdzał zgodność bez ostrzeżenia.
+- Przebudowa bitstreamów I2S, żeby `I2sHilTestplan` nie potrzebował `-Dallow_stale=1`.
+
+### Stan (2026-10-01)
+
+- Symulacja harnessu: `FeHarnessTestplan` 11/11 zielonych, bit w bit przez cały tor (Verilator 5.020). `max |y − float|` = 0,41–0,51 LSB.
+- Host: `FeHilTestplan` bez płytek *canceled*, na atrapach zielony; `HilHostTestplan` 9/9.
+- Firmware: `hil_stream` i `hil_cmd` przechodzą testy na PC (także ASan/UBSan). `fe_role.c` przechodzi sprawdzenie składni na nagłówkach ESP-IDF 5.2.3 (`-Wall -Wextra -Wconversion`). Build `idf.py` i płytka nie były jeszcze uruchamiane.
+- Bitstream: Verilog `FeHarnessTop_mimas` się elaboruje (DCM 3/4 = 75 MHz dokładnie). ISE: wyniki niżej, w „Wyniki na płytce”.
+
+Do sprawdzenia na stanowisku, zanim uwierzymy wynikom:
+
+- **ESP32 slave full duplex przy BCLK 1,03 MHz i fs 16 053 Hz.** Wcześniej sprawdzony tylko przy 48/44,1 kHz (#9513). Najpierw `hw_link` (selftest w pętli 32/32), potem `hw_fe_chain` z małym `-Dsamples`.
+- **Pakowanie 32/32 w DMA.** Selftest w pętli tego nie rozstrzyga (błąd symetryczny). Rozstrzyga echo `x` w `hw_fe_chain`: N0 ze złym bajtem albo kanałem daje błąd N0, a nie N1.
+- Zmiana `HilCounters` i `HilProtocol.scala` jest w źródłach bitstreamu I2S, więc `HilBench` uzna bitstreamy I2S z `af3cd91` za nieaktualne. Treść logiki I2S się nie zmieniła; do przebudowania wystarczy `-Dallow_stale=1`.
 
 ## Źródła
 

@@ -3,6 +3,19 @@
 # flash 26-32; PSRAM oktalny 33-37; dioda RGB 38 albo 48 (wersja plytki).
 menu "vertebra-hil"
 
+    choice HIL_IP
+        prompt "IP (rola firmware'u, `ver` ip=)"
+        default HIL_IP_I2S
+        help
+            Jedna rola na obraz: host sprawdza ip= z `ver` (HilBench).
+            Frontend: idf.py -B build-fe -D SDKCONFIG=build-fe/sdkconfig
+            -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.fe" build flash
+        config HIL_IP_I2S
+            bool "i2s: wzorzec I2S, master albo slave (contract/i2s)"
+        config HIL_IP_FE
+            bool "fe: mikrofon INMP441 dla frontendu N0 + N1, PSRAM (contract/fe)"
+    endchoice
+
     config HIL_PIN_SCK
         int "SCK na magistrali (do FPGA P7-1)"
         range 0 48

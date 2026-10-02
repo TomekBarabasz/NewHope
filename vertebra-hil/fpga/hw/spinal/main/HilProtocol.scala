@@ -151,22 +151,40 @@ object HilProtocol {
 object HilBuildInfo {
   import scala.sys.process._
 
-  /** Pathspec gita wzgledem korzenia repo. */
+  /** Pathspec gita wzgledem korzenia repo: bitstream I2S. */
   val sources : Seq[String] = Seq(
     "vertebra-hil/fpga/hw",
     ":(exclude)vertebra-hil/fpga/hw/spinal/test",
     ":(exclude)vertebra-hil/fpga/hw/gen",     // wyniki (Verilog, .bin)
+    ":(exclude)vertebra-hil/fpga/hw/spinal/main/fe",
+    ":(exclude)vertebra-hil/fpga/hw/fe_harness.ucf",
     "i2s/hw/spinal/main",                     // DUT-y
     "mimas_v2/hw/spinal/main")
 
-  lazy val gitHash : Long = scala.util.Try {
+  /** Bitstream frontendu (N0 + N1): rdzen harnessu, czesc fe, DUT z
+    * front_end i I2sSlave z i2s (nadajnik powrotny). Czesc I2S harnessu
+    * go nie dotyczy, wiec zmiana w niej nie robi plytki FE nieaktualna. */
+  val feSources : Seq[String] = Seq(
+    "vertebra-hil/fpga/hw",
+    ":(exclude)vertebra-hil/fpga/hw/spinal/test",
+    ":(exclude)vertebra-hil/fpga/hw/gen",
+    ":(exclude)vertebra-hil/fpga/hw/spinal/main/i2s",
+    ":(exclude)vertebra-hil/fpga/hw/i2s_harness.ucf",
+    "front_end/hw/spinal/main",
+    "i2s/hw/spinal/main",
+    "mimas_v2/hw/spinal/main")
+
+  def hashOf(srcs : Seq[String]) : Long = scala.util.Try {
     val quiet = ProcessLogger(_ => ())                  // bez "fatal: not a git repository"
     val top   = "git rev-parse --show-toplevel".!!(quiet).trim
     val h     = "git rev-parse --short=8 HEAD".!!(quiet).trim
-    val dirty = Process(Seq("git", "-C", top, "status", "--porcelain", "--") ++ sources).!!(quiet).trim.nonEmpty
+    val dirty = Process(Seq("git", "-C", top, "status", "--porcelain", "--") ++ srcs).!!(quiet).trim.nonEmpty
     val v     = java.lang.Long.parseLong(h.take(8), 16)
     if (dirty) v | 1L else v & ~1L
   }.getOrElse(0L)
+
+  lazy val gitHash   : Long = hashOf(sources)
+  lazy val gitHashFe : Long = hashOf(feSources)
 }
 
 /** Generator liczb harnessu (wspolny, bez zwiazku z wzorcem IP). */
