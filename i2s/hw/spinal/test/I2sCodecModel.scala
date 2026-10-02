@@ -34,16 +34,20 @@ object I2sCodecModel {
     * SPRZED zbocza (ta sama wlasnosc, dzieki ktorej StreamMonitor widzi
     * valid && ready w chwili handshake'u). Model reagujacy od razu widzialby
     * opadajace SCK dopiero na nastepnym zboczu i wystawial bit 2 cykle po
-    * nim. Przy halfDiv = 1 DUT probkowal wtedy stary bit - RX przesuniety
-    * o jeden bit na `min`, przy czystym TX. Tak wlasnie wygladal objaw. */
+    * nim. Przy sckDiv = 2 (dawne halfDiv = 1) DUT probkowal wtedy stary
+    * bit - RX przesuniety o jeden bit na `min`, przy czystym TX. Tak
+    * wlasnie wygladal objaw. */
   val outDelay = 1
 
   /** Wyprowadzenie. SCK opada na zboczu t; nowy bit jest na SDI od
-    * t + outDelay (przed zboczem t+1) do t + 2*halfDiv + outDelay.
-    * DUT probkuje na zboczu, na ktorym SCK wstaje (t + halfDiv), albo
-    * cykl pozniej (t + halfDiv + 1 <= t + 2*halfDiv). Oba mieszcza sie
-    * w oknie dla kazdego halfDiv >= 1, o ile outDelay < okres. */
-  val minHalfDiv = 1
+    * t + outDelay (przed zboczem t+1) do t + sckDiv + outDelay.
+    * DUT probkuje na zboczu, na ktorym SCK wstaje (t + sckLow), albo
+    * cykl pozniej (t + sckLow + 1 <= t + sckDiv, czyli sckHigh >= 1).
+    * Oba mieszcza sie w oknie dla kazdego sckDiv >= 2, parzystego czy
+    * nie, o ile outDelay < okres. Nadajnik leading-edge: bit od
+    * r_j + outDelay do r_(j+1) + outDelay, probkowany na r_(j+1) - tez
+    * dla kazdego sckDiv >= 2. */
+  val minSckDiv = 2
 }
 
 /** Linie od strony mastera (jak I2sPins): sck, ws i sdo czyta, sdi steruje.

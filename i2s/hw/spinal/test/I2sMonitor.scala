@@ -23,7 +23,7 @@ import I2sEvent._
 //  Po kazdym aktywnym zboczu czytamy piny. Kolejne probki to wartosci
 //  pinow w kolejnych cyklach. SCK/WS/SDO sa wyjsciami rejestrow na tym
 //  samym zegarze, wiec nie ma tu filtra, okna ani granicy slepoty jak
-//  w I2cMonitor. Jedyna granica to halfDiv >= 1, pilnowana w
+//  w I2cMonitor. Jedyna granica to sckDiv >= 2, pilnowana w
 //  i2s_param_bounds.
 //
 //  RESET
