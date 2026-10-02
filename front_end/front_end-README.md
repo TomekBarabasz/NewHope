@@ -17,18 +17,24 @@ rfft.io.input << fe.io.output
 
 ## N0 · I2sMicRx
 
-Master I2S: sam generuje SCK = 75 MHz / 73 i WS = SCK / 64, więc
-fs = 16 053,08 Hz (+5,7 centa, kontrakt D-006). Lewy kanał (L/R = GND),
-górne 18 bitów 24-bitowego słowa (obcięcie). SD przez synchronizator
-2 FF, próbkowane na narastającym SCK. Po resecie WS = 1, więc pierwsze
-opadające zbocze otwiera lewy slot prawdziwą zmianą WS i pierwsza próbka
-jest pełna. Wszystkie piny prosto z rejestrów. Bez mnożników i BRAM.
+Cienka obudowa `newhope.com.i2s.I2sMaster` (format Philips, master).
+SCK = 75 MHz / 73 (nisko 37 cykli, wysoko 36), WS = SCK / 64, więc
+fs = 16 053,08 Hz (+5,7 centa, kontrakt D-006). Master ma `width = 18`,
+więc z lewego slotu bierze 18 najstarszych pozycji, czyli `słowo24[23:6]`.
+`io.rx` strzela raz na ramkę, na początku następnej, nigdy dla ramki
+częściowej. TX nieużywany. SDI bez synchronizatora, zgodnie z decyzją
+I2sMastera.
+
+Wymaga I2sMastera z dzielnikiem pełnego okresu (`sckDiv`, także
+nieparzystym) i `I2sGenerics.fromSckDiv` - 75 MHz / 4672 nie jest
+skończonym ułamkiem dziesiętnym, więc fs z konstruktora nie da się
+wpisać dokładnie.
 
 ## N1 · DcFilter
 
 `y[n] = x[n] − x[n−1] + a·y[n−1]`, `a = 1 − 2π·30/fs`. Zamiast mnożenia
-1 − a jest rozkładane na potęgi dwójki: przy fs = 16 053 Hz
-`1 − a = 2⁻⁶ − 2⁻⁸`, fc = 29,94 Hz, **zero DSP48A1**.
+1 − a jest rozkładane na potęgi dwójki:
+`1 − a = 2⁻⁶ − 2⁻⁸`, fc = 29,94 Hz przy fs = 16 053 Hz, **zero DSP48A1**.
 
 | Pozycja | Wartość (Mimas) |
 | --- | --- |
@@ -49,28 +55,20 @@ PyTorch musi mieć ten sam filtr przed STFT, inaczej cechy się rozjadą.
 | Testplan | Konfiguracje | Bez symulacji |
 | --- | --- | --- |
 | `DcFilterTestplan` | mimas, g6_w10 (dolna granica G), t3_16k | `dc_param_bounds`, `dc_golden_vs_float` |
-| `I2sMicRxTestplan` | mimas (dzielnik 73), d8 (dolna granica), d9_right, d8_w24 | `i2s_param_bounds` |
-| `MicFrontEndTestplan` | d8 + Framer 16/6 i 512/160 | `fe_param_bounds` |
+| `I2sMicRxTestplan` | mimas (sckDiv 73), s3 (dolna granica), s4_right, s3_w24 | `i2s_param_bounds` |
+| `MicFrontEndTestplan` | s3 + Framer 16/6 i 512/160 | `fe_param_bounds` |
 
 `MicFrontEndTestplan` składa N0 → N1 → `Framer` w jednej symulacji i
-porównuje ramki z `FftGolden.framer(DcGolden(słowo >> 6))`. Model
+porównuje ramki z `FramerRef(DcGolden(słowo >> 6))` (kopia `FftGolden.framer` na `Bfp` z main). Model
 mikrofonu (`MicModel`) wystawia bity na pinach jak INMP441, a bit
 opóźnienia, bity 25..32 i drugi kanał wypełnia losowymi śmieciami.
 
-Dolna granica dzielnika (8) wynika z `sckLow ≥ syncStages + 2` i jest
-ciasna: przy 7 model cyklowy gubi bity.
+Dolna granica `sckDiv = 3` (`sckLow = 2`) wynika z modelu mikrofonu,
+który wystawia bit do cyklu po zboczu; przy 2 model cyklowy gubi bity.
+Na płytce zapas to 37 cykli.
 
 Porty są `Flow`, więc `StreamConformance` (payload_stable, backpressure)
 nie ma zastosowania; ciszę w resecie sprawdzają `dc_reset` i `i2s_reset`.
-
-## Na sprzęcie (vertebra-hil)
-
-`MicFrontEnd` ma harness na Mimas V2 (`vertebra-hil.md` §12, `contract/fe/commands.md`). ESP32-S3 udaje INMP441 jako slave I2S i odbiera wynik z powrotem po I2S. PC porównuje go bit w bit z `DcGolden`, licząc golden z echa próbki N0, a echo N0 osobno ze słowem bodźca.
-
-```
-sbt "hilFpga/testOnly *FeHarnessTestplan"                                  harness w symulacji
-sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"      stanowisko
-```
 
 ## Pliki
 
@@ -78,7 +76,7 @@ sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"      stano
 lib/frontend/
   hw/spinal/main/
     FrontEndGenerics.scala   I2sMicGenerics, DcGenerics, DcTerm, Dc.csd, FrontEndGenerics (+ mimas)
-    I2sMicRx.scala           N0
+    I2sMicRx.scala           N0 (obudowa I2sMaster)
     DcFilter.scala           N1, DcHw
     MicFrontEnd.scala        N0 + N1
   hw/spinal/test/
@@ -89,14 +87,13 @@ lib/frontend/
     MicFrontEndTestplan.scala  (MicFramerTop: N0 → N1 → Framer)
 ```
 
-Synteza zależy tylko od SpinalHDL. Testy: `vertebra` oraz `fft`
-(`Framer` z main, `FftGolden` i `Cx` z test), więc w `build.sbt`
-potrzebna jest zależność test→test, np.:
+Synteza zależy od modułu I2S (`newhope.com.i2s`). Testy dodatkowo od
+`vertebra` i `fft` (tylko main: `Framer`, `BfpCplx`, `Bfp`), np.:
 
 ```scala
 lazy val frontend = (project in file("lib/frontend"))
   .settings(/* te same ustawienia co fft: scalaSource = hw/spinal/main, hw/spinal/test */)
-  .dependsOn(core, vertebra % "test->compile", fft % "compile->compile;test->test")
+  .dependsOn(core, i2s, vertebra % "test->compile", fft % "test->compile")
 ```
 
 ```

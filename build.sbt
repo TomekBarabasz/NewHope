@@ -133,7 +133,7 @@ lazy val uartdemo = (project in file("uart_demo"))
   .settings(hwSettings)
 
 lazy val front_end = (project in file("front_end"))
-  .dependsOn(vertebra)
+  .dependsOn(vertebra, i2s)
   .settings(hwSettings)
 
 // ---------------------------------------------------------------------
