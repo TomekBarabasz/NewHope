@@ -92,7 +92,7 @@ class McbDemoTop(
 
     // SevenSegMux liczy szczeliny z podanej czestotliwosci, wiec MUSI dostac
     // zegar UI, a nie domyslne 100 MHz.
-    val sevenSeg = SevenSegMux(c.uiFrequency, frameRate = 1 kHz, blankCycles = 64)
+    val sevenSeg = SevenSegMux(c.uiHertz, frameRate = 1 kHz, blankCycles = 64)
     sevenSeg.io.digits := status.io.digits
   }
 
@@ -109,77 +109,86 @@ class McbDemoTop(
 
 object McbDemoTopVerilog extends App {
 
-  val cfg32  = MigConfig(dataWidth = 32)    // Config-1, port 32 b  -> 100 MB/s
-  val cfg128 = MigConfig(dataWidth = 128)   // Config-5, port 128 b -> 400 MB/s
+  // ---------------------------------------------------------------- zegary
+  // JEDNO miejsce na cala konfiguracje zegarow. Dzielniki PLL ida stad wprost
+  // do parametrow s6_lpddr.v, wiec Verilogu nie trzeba dotykac.
+  //
+  //   MigConfig.mem150ui100                      gotowy preset
+  //   MigConfig.forClocks(memMHz = 150, uiMHz = 100)   solver
+  //   MigConfig.forClocks(166.67, 100, allowClkOut0 = Seq(1,2,3,4))
+  //                                              lepszy jitter, CLKOUT0 = 3,
+  //                                              ale sprawdz w Clocking Wizard
+  //
+  // Zmiana dataWidth wymaga PRZEGENEROWANIA core'a w MIG - to nie jest
+  // parametr, ktory da sie przelaczyc samym Verilogiem.
+  val cfg = MigConfig.forClocks(memMHz = 150, uiMHz = 75)
 
+  // ---------------------------------------------------------------- tryby
   /**
-   * Benchmarki sa tak dobrane, zeby na KAZDEJ szerokosci portu przerzucic
-   * dokladnie 1 MiB na przebieg. Dzieki temu odczyt z wyswietlacza to wprost
-   * MiB/s i wyniki roznych konfiguracji mozna porownywac bez przeliczania.
+   * Benchmark. burstCount dobrany tak, by na przebieg przypadlo dokladnie
+   * 1 MiB NIEZALEZNIE od szerokosci portu - wtedy odczyt z wyswietlacza to
+   * wprost MiB/s i konfiguracje sa porownywalne.
    *
-   * Bez tego zabiegu pulapka jest podstepna: przy 128 bitach i tym samym
-   * burstCount na przebieg idzie 4x wiecej bajtow, wiec wyswietlacz pokazalby
-   * TO SAMO 381 mimo czterokrotnie wiekszej przepustowosci.
+   * Bez tego pulapka jest podstepna: przy szerszym porcie na przebieg idzie
+   * proporcjonalnie wiecej bajtow, wiec wyswietlacz pokazalby TO SAMO mimo
+   * wiekszej przepustowosci.
    */
-  def bench(cfg: MigConfig) = {
-    val bl = 32
-    val n  = 1048576 / (2 * bl * cfg.bytesPerWord)   // tak, by wyszlo 1 MiB
+  def bench(burstLen: Int = 32) = {
+    val n = 1048576 / (2 * burstLen * cfg.bytesPerWord)
     new McbDemoTop(
-      c = cfg, burstLen = bl, burstCount = n,
-      stride = bl * cfg.bytesPerWord, sweepColumns = false, holdCycles = 0
+      c = cfg, burstLen = burstLen, burstCount = n,
+      stride = burstLen * cfg.bytesPerWord, sweepColumns = false, holdCycles = 0
     )
   }
 
-  /**
-   * Regresja: krok 2 kB rusza banki i wiersze, przerwa sprawdza odswiezanie.
-   * Przerwa liczona Z ZEGARA, nie wpisana na sztywno - przy zmianie
-   * czestotliwosci pamieci zostaje 200 ms, a nie zmienia sie razem z nia.
-   */
-  def regression(cfg: MigConfig) = new McbDemoTop(
+  /** Regresja: krok 2 kB przez banki i wiersze, 200 ms na odswiezanie. */
+  def regression = new McbDemoTop(
     c = cfg, burstLen = 1, burstCount = 4096, stride = 2048,
     sweepColumns = true, holdCycles = (cfg.uiClkHz / 5).toInt, errIdxWidth = 13
   )
 
-  /** Bisekcja z poprzedniego kroku, na dowolnej szerokosci. */
-  def diag(cfg: MigConfig, outstanding: Int, strict: Boolean) = new McbDemoTop(
+  /** Bisekcja: kazdy krok zmienia dokladnie jeden element, jeden przebieg. */
+  def diag(outstanding: Int, strict: Boolean) = new McbDemoTop(
     c = cfg, burstLen = 1, burstCount = 16, stride = 2048,
     sweepColumns = true, holdCycles = 0,
     maxOutstanding = outstanding, strictWrite = strict, singlePass = true
   )
 
-  val mode = if (args.isEmpty) "bench32" else args(0)
-  val (cfg, top) = mode match {
-    case "bench32"    => (cfg32,  () => bench(cfg32))
-    case "bench128"   => (cfg128, () => bench(cfg128))
-    case "regress32"  => (cfg32,  () => regression(cfg32))
-    case "regress128" => (cfg128, () => regression(cfg128))
-    case "diag1"      => (cfg32,  () => diag(cfg32, 1, true))
-    case "diag2"      => (cfg32,  () => diag(cfg32, 0, true))
-    case "diag3"      => (cfg32,  () => diag(cfg32, 0, false))
-    case other        => sys.error(s"nieznany tryb '$other'")
+  val mode = if (args.isEmpty) "bench" else args(0)
+  val top: () => McbDemoTop = mode match {
+    case "bench"   => () => bench()
+    case "bench16" => () => bench(16)
+    case "bench64" => () => bench(64)
+    case "regress" => () => regression
+    case "diag1"   => () => diag(1, true)
+    case "diag2"   => () => diag(0, true)
+    case "diag3"   => () => diag(0, false)
+    case other     => sys.error(s"nieznany tryb '$other'")
   }
 
   SpinalConfig(
-    targetDirectory = s"hw/gen/verilog/$mode",
+    targetDirectory = s"hw/gen/$mode",
     defaultConfigForClockDomains = ClockDomainConfig(
       resetKind        = SYNC,
       resetActiveLevel = HIGH
     )
   ).generateVerilog(top())
 
-  val bytesPerPass = 2L * 32 * (1048576 / (2 * 32 * cfg.bytesPerWord)) * cfg.bytesPerWord
+  // ------------------------------------------------------------ podsumowanie
+  val burstLen     = mode match { case "bench16" => 16; case "bench64" => 64; case _ => 32 }
+  val bytesPerPass = 2L * burstLen * (1048576 / (2 * burstLen * cfg.bytesPerWord)) * cfg.bytesPerWord
+  val peak         = cfg.portPeakBytesPerSec min cfg.dramPeakBytesPerSec
+  val limiter      = if (cfg.portPeakBytesPerSec < cfg.dramPeakBytesPerSec) "port" else "pamiec"
+
   println(s"""
-    |tryb            : $mode  ->  rtl/$mode/McbDemoTop.v
-    |szerokosc portu : ${cfg.dataWidth} b (${cfg.bytesPerWord} B/slowo)
-    |zegar pamieci   : ${cfg.memClkHz / 1000000} MHz (okres ${cfg.memClkPeriod} ps)
-    |zegar UI        : ${cfg.uiClkHz / 1000000} MHz  <- ZALOZENIE memclk/${cfg.uiClkDivider}!
-    |                  sprawdz C3_CLKOUT2_DIVIDE w infrastructure.v
-    |                  i wyprowadzone ograniczenia w .twr
-    |sufit portu     : ${cfg.portPeakBytesPerSec / 1000000} MB/s
-    |szczyt pamieci  : ${cfg.dramPeakBytesPerSec / 1000000} MB/s
-    |na przebieg     : ${bytesPerPass / 1024} KiB
-    |oczekiwany odczyt przy pelnym wysyceniu portu:
-    |                  ${cfg.portPeakBytesPerSec / bytesPerPass} (czyli MiB/s)
+    |tryb: $mode  ->  hw/gen/$mode/McbDemoTop.v
+    |
+    |${cfg.report}
+    |  zapas portu : ${"%.2f".format(cfg.uiClkHz.toDouble / cfg.uiClkMinHz)}x ponad minimum
+    |
+    |  ogranicza   : $limiter (${peak / 1000000} MB/s)
+    |  na przebieg : ${bytesPerPass / 1024} KiB
+    |  oczekiwany odczyt przy pelnym wysyceniu: ${peak / bytesPerPass}
     |
     |wyswietlacz: --- przed kalibracja, EEn blad MCB (1 wr_underrun,
     |             2 wr_error, 3 rd_overflow, 4 rd_error),

@@ -333,20 +333,49 @@ z wyświetlacza to wprost MiB/s i konfiguracje są porównywalne.
 
 **Łącznie 6,4× od punktu wyjścia.**
 
-Trzy wnioski, które wyszły z liczb:
+### Wpływ długości burstu i szybkości portu
 
-Przy 32 bitach port jest wysycony w 99,9% — warstwa `Stream` z burstami nie
-wnosi mierzalnego narzutu. Bursty dłuższe niż 32 nie miały czego odzyskać.
+Przy pamięci 150 MHz, porcie 128 b i zegarze UI 75 MHz (zapas portu 2,00×
+ponad minimum z UG388):
 
-Skalowanie z częstotliwością jest **idealnie liniowe**, a sprawność stała co do
-drugiego miejsca po przecinku. Gdyby brakujące 3,5% brało się z zarządzania
-wierszami, sprawność by spadała — `tRCD` i `tRP` to stałe czasy, więc w taktach
-rosną. Skoro nie spada, aktywacja jest w pełni schowana za przeplotem banków.
+| tryb | odczyt | MB/s | % szczytu | burstów w locie |
+|---|---|---|---|---|
+| `bench16` | 552 | 578,8 | 96,5% | 4 |
+| `bench32` | 552 | 578,8 | 96,5% | 2 |
+| `bench64` | 516 | 541,1 | 90,2% | 1 |
 
-Odświeżanie tłumaczy około 1% (`tRFC` do `tREFI`). Reszta to narzut
-proporcjonalny do liczby taktów. **Hipoteza:** jeden takt przerwy na burst,
-co przy `BL = 32` daje 3,1%. Sprawdzian: `bench128` z `burstLen = 16` —
-jeśli sprawność spadnie do ~93,8%, hipoteza się broni.
+`BL = 64` wypada gorzej **strukturalnie**, nie przez strojenie: dławik daje
+`cap = 64 − 64 = 0`, więc dokładnie jedna komenda w powietrzu. Dwa bursty po
+64 słowa nie zmieszczą się w 64-słowowej kolejce, niezależnie od kodu.
+
+### Skąd brakujące 3,5% — i skąd NIE
+
+Skalowanie z częstotliwością jest idealnie liniowe, a sprawność stała co do
+drugiego miejsca po przecinku. Gdyby narzut brał się z zarządzania wierszami,
+sprawność by spadała z częstotliwością — `tRCD` i `tRP` to stałe czasy, więc
+w taktach rosną. Nie spada, czyli aktywacja jest schowana za przeplotem banków.
+
+Sprawdzone i **odrzucone** hipotezy:
+
+- *Zbyt wolny port.* Zapas portu podniesiony z 1,00× na 2,00× (zegar UI
+  z 37,5 na 75 MHz) dał **dokładnie ten sam** odczyt 552. Czysty eksperyment
+  kontrolny: jedna zmienna, wynik bez zmian.
+- *Narzut na komendę.* `BL = 16` i `BL = 32` dają identyczny wynik. Gdyby
+  narzut przypadał na burst, krótszy byłby dwa razy gorszy.
+
+Co zostaje, policzone z parametrów w `s6_lpddr.v`:
+
+| składnik | udział |
+|---|---|
+| odświeżanie (`tRFC` 97,5 ns / `tREFI` 7800 ns) | 1,25% |
+| + precharge-all przed nim (`tRP` 15 ns) | 1,44% |
+| **reszta — poziom DRAM/MCB** | **≈ 2,1%** |
+
+Te 2,1% to aktywacje niecałkowicie schowane za przeplotem, szeregowanie komend
+wewnątrz MCB i przełączanie kierunku szyny. Niedostępne z poziomu portu.
+
+**96,5% szczytu przepustowości pamięci przy `BL` od 16 do 32 to realistycznie
+koniec drogi.**
 
 ### Timing i zasoby (stan z konfiguracji 32 b / 100 MHz)
 
@@ -409,12 +438,14 @@ dotykała ścieżki, która mogłaby to naprawić. Najpewniej nieaktualny bitstr
 ale nie zostało to potwierdzone. Błąd, który znika bez zidentyfikowanej
 przyczyny, zwykle wraca.
 
-**Brak długiego przebiegu na 166 MHz.** Trasy DDR na płytce Numato walidował
-na 100 MHz; 166 MHz to 67% powyżej. Zapas czasowy na `mcb_drp_clk` spadł do
-1,8×. Zanim uznać to za produkcyjne, warto zostawić `regress128` na godzinę.
-Konfiguracje 125 i 150 MHz są sprawdzone i stanowią punkty odwrotu.
+**Brak długiego przebiegu pod obciążeniem.** Trasy DDR na płytce Numato
+walidował na 100 MHz. Konfiguracja robocza to dziś 150 MHz; 166 MHz też
+przechodziła. Zanim uznać to za produkcyjne, warto zostawić `regress` na
+godzinę i sprawdzić, czy `data_error` ani `mcb_fault` się nie zapali.
 
-**Hipoteza narzutu na burst** (§7) — jeden build, żeby rozstrzygnąć.
+**`TIG` na `calib_done`.** Przejście z domeny kalibracji przez `BufferCC` ma
+0,283 ns zapasu i jako jedyne NIE zyskuje na zwolnieniu zegara — jego wymóg
+wynika z relacji zboczy dwóch zegarów. Szczegóły w `MCB-ZEGARY.md` §6.
 
 **Auto-precharge.** Silnik używa zwykłych `WRITE`/`READ`. Przy strumieniu
 sekwencyjnym każdy wiersz jest odwiedzany raz, więc `WRITE_AP`/`READ_AP` mogłyby
@@ -424,6 +455,10 @@ przyspieszyć kolejną aktywację. Kody są już w `MigInstr`, zmiana to dwie st
 To alternatywa dla warstwy `Stream`, nie jej kontynuacja — wymieniłaby cały
 `MigPort`. Sensowna, jeśli celem jest podpięcie do ekosystemu `Axi4`
 w SpinalHDL.
+
+**Zegary i marginesy czasowe** mają osobną ściągawkę: `MCB-ZEGARY.md`.
+Dwie sprawdzone konfiguracje (UI 100 i 75 MHz), zmierzone zapasy na styku
+z MIG-iem i zasady projektowania logiki, która go dotyka.
 
 **Dwie konfiguracje = dwa projekty ISE.** Podmoduły zawsze nazywają się
 `memc_wrapper`, `mcb_ui_top` i tak dalej, niezależnie od konfiguracji, więc

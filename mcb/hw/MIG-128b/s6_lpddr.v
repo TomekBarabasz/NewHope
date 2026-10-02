@@ -66,13 +66,13 @@
 //*****************************************************************************
 `timescale 1ns/1ps
 
-(* X_CORE_INFO = "mig_v3_61_lpddr_lpddr_s6, Coregen 12.4" , CORE_GENERATION_INFO = "lpddr_lpddr_s6,mig_v3_61,{component_name=s6_lpddr, C3_MEM_INTERFACE_TYPE=LPDDR, C3_CLK_PERIOD=10000, C3_MEMORY_PART=mt46h32m16xxxx-5, C3_PA_SR=FULL, C3_OUTPUT_DRV=FULL, C3_PORT_CONFIG=One 128-bit bi-directional port, C3_MEM_ADDR_ORDER=ROW_BANK_COLUMN, C3_PORT_ENABLE=Port0, C3_INPUT_PIN_TERMINATION=EXTERN_TERM, C3_DATA_TERMINATION=25 Ohms, C3_CLKFBOUT_MULT_F=4, C3_CLKOUT_DIVIDE=2, C3_DEBUG_PORT=0, C3_INPUT_CLK_TYPE=Single-Ended, LANGUAGE=Verilog, SYNTHESIS_TOOL=ISE, NO_OF_CONTROLLERS=1}" *)
+(* X_CORE_INFO = "mig_v3_61_lpddr_lpddr_s6, Coregen 12.4" , CORE_GENERATION_INFO = "lpddr_lpddr_s6,mig_v3_61,{component_name=s6_lpddr, C3_MEM_INTERFACE_TYPE=LPDDR, C3_CLK_PERIOD=6000, C3_MEMORY_PART=mt46h32m16xxxx-5, C3_PA_SR=FULL, C3_OUTPUT_DRV=FULL, C3_PORT_CONFIG=One 128-bit bi-directional port, C3_MEM_ADDR_ORDER=ROW_BANK_COLUMN, C3_PORT_ENABLE=Port0, C3_INPUT_PIN_TERMINATION=EXTERN_TERM, C3_DATA_TERMINATION=25 Ohms, C3_CLKFBOUT_MULT_F=4, C3_CLKOUT_DIVIDE=2, C3_DEBUG_PORT=0, C3_INPUT_CLK_TYPE=Single-Ended, LANGUAGE=Verilog, SYNTHESIS_TOOL=ISE, NO_OF_CONTROLLERS=1}" *)
 module s6_lpddr #
 (
    parameter C3_P0_MASK_SIZE           = 16,
    parameter C3_P0_DATA_PORT_SIZE      = 128,
    parameter DEBUG_EN                = 0,       
-   parameter C3_MEMCLK_PERIOD        = 10000,       
+   parameter C3_MEMCLK_PERIOD        = 6000,       
    parameter C3_CALIB_SOFT_IP        = "TRUE",       
    parameter C3_SIMULATION           = "FALSE",       
    parameter C3_RST_ACT_LOW          = 0,       
@@ -80,7 +80,18 @@ module s6_lpddr #
    parameter C3_MEM_ADDR_ORDER       = "ROW_BANK_COLUMN",       
    parameter C3_NUM_DQ_PINS          = 16,       
    parameter C3_MEM_ADDR_WIDTH       = 13,       
-   parameter C3_MEM_BANKADDR_WIDTH   = 2        
+   parameter C3_MEM_BANKADDR_WIDTH   = 2,
+
+   // Parametry PLL przeniesione z ciała modułu do listy #(), żeby dało się
+   // je nadpisać przy instancjonowaniu. W formie ANSI parametry
+   // deklarowane w ciele modułu są lokalne i nadpisać się ich nie da.
+   // Wartości domyślne = oryginalne, więc bez nadpisania nic się nie zmienia.
+   parameter C3_CLKOUT0_DIVIDE     = 2,
+   parameter C3_CLKOUT1_DIVIDE     = 2,
+   parameter C3_CLKOUT2_DIVIDE     = 16,
+   parameter C3_CLKOUT3_DIVIDE     = 8,
+   parameter C3_CLKFBOUT_MULT      = 4,
+   parameter C3_DIVCLK_DIVIDE      = 1
 )	
 
 (
@@ -141,27 +152,6 @@ module s6_lpddr #
    localparam  C3_P1_DATA_PORT_SIZE      =128;
    localparam C3_PORT_ENABLE              = 6'b000001;
    localparam C3_PORT_CONFIG             =  "B128";
-   localparam C3_CLKOUT0_DIVIDE       = 2;       
-   localparam C3_CLKOUT1_DIVIDE       = 2;       
-   localparam C3_CLKOUT2_DIVIDE       = 16;       
-   localparam C3_CLKOUT3_DIVIDE       = 8;       
-
-   //memClkPeriod = 10000
-   //localparam C3_CLKFBOUT_MULT        = 4;     dla 100MHz
-   //localparam C3_DIVCLK_DIVIDE        = 1;     dla 100MHz
-   
-   //memClkPeriod = 8000
-   //localparam C3_CLKFBOUT_MULT        = 5;     //dla 125MHz
-   //localparam C3_DIVCLK_DIVIDE        = 1;     //dla 125MHz
-   
-   //memClkPeriod = 6666
-   //localparam C3_CLKFBOUT_MULT        = 6;     //dla 150MHz
-   //localparam C3_DIVCLK_DIVIDE        = 1;     //dla 150MHz
-   
-   //memClkPeriod = 6000
-   localparam C3_CLKFBOUT_MULT        = 20;      //dla 166MHz
-   localparam C3_DIVCLK_DIVIDE        = 3;       //dla 166MHz
-
    localparam C3_ARB_ALGORITHM        = 0;       
    localparam C3_ARB_NUM_TIME_SLOTS   = 12;       
    localparam C3_ARB_TIME_SLOT_0      = 3'o0;       

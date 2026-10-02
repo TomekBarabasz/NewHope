@@ -1,7 +1,7 @@
 package newhope.vertebra.hil
 
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
-import newhope.vertebra.hil.i2s.{I2sBenchCfg, I2sHil, I2sHilPlan, I2sHilTestplan, I2sHilVariant, I2sWords}
+import newhope.vertebra.hil.i2s.{I2sDcm, I2sBenchCfg, I2sHil, I2sHilPlan, I2sHilTestplan, I2sHilVariant, I2sWords}
 import org.scalatest.{Args, ConfigMap, Reporter}
 import org.scalatest.events.{Event, TestCanceled, TestFailed, TestSucceeded}
 import HilProtocol._
@@ -309,13 +309,15 @@ class HilHostTestplan extends TestplanSuite {
     r.collect { case (k, v) if k.contains(name) => v }.headOption.getOrElse(s"brak testu $name")
 
   testpoint("host_hw_on_fakes") {
-    val clean = runOnFakes(_ => ())
+    // DUT slave "nie nadaza" troche ponizej przewidywanej granicy: sweep ma co znalezc
+    val clean = runOnFakes(bus => bus.dutMinHz = 0.8 * I2sDcm.boundaryHz(I2sBenchCfg.all.head))
     for (n <- Seq("hw_link (esp32)", "hw_link (fpga)", "hw_param_bounds", "hw_slv_rx_frame", "hw_slv_tx_frame",
                   "hw_mst_rx_frame", "hw_mst_tx_frame",
                   "hw_full_duplex (fpga_slave)", "hw_full_duplex (fpga_master)", "hw_padding", "hw_lsb_across_ws",
                   "hw_word_length_mismatch", "hw_tx_underrun (fpga_slave)", "hw_tx_underrun (fpga_master)",
                   "hw_fs_fractional", "hw_startup_mid_frame",
-                  "hw_random_reset (fpga_slave)", "hw_random_reset (fpga_master)")) {
+                  "hw_random_reset (fpga_slave)", "hw_random_reset (fpga_master)",
+                  "hw_clock_ratio_sweep")) {
       info(s"$n: ${result(clean, n)}")
       assert(result(clean, n) == "ok", s"$n: ${result(clean, n)}")
     }

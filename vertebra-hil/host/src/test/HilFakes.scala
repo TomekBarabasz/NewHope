@@ -47,6 +47,13 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
          Addr.RstCount, Addr.RstSeed, Addr.RstMin, Addr.RstMask, Addr.RstLen).map(_ -> 0L)) ++
     Seq(0x100 -> 0L, 0x101 -> (variantCode & 0xFF), 0x102 -> ((variantCode >> 8) & 0xFF))
 
+  // Zegar dut: M/D wariantu po konfiguracji, dcm_status zawsze locked,
+  // dut_freq z M/D (okno FreqWindowCycles cykli sys 100 MHz).
+  private val dcm0 = newhope.vertebra.hil.i2s.I2sHilVariant.all.find(_.code == variantCode)
+    .map(v => newhope.vertebra.hil.i2s.I2sDcm.initial(v)).getOrElse((2, 1))
+  rw(0x103) = DcmProg.encode(dcm0._1, dcm0._2)
+  def dutHz : Double = { val (m, d) = DcmProg.decode(rw(0x103)); 1e8 * m / d }
+
   val counters = mutable.Map[String, Long]().withDefaultValue(0L)
   counters("lock_at") = 0xFFFFFFFFL
   var capture : Seq[Seq[Long]] = Nil
@@ -85,6 +92,8 @@ class FakeFpga(val variantCode : Long, val build : Long, val ipId : String = "I2
     case x if x >= Capture.Base && x < Capture.Base + Capture.size =>
       val (i, j) = ((x - Capture.Base) / Capture.Stride, (x - Capture.Base) % Capture.Stride)
       Right(if (i < capture.size && j < Capture.WordsPerEntry) capture(i)(j) else 0L)
+    case 0x104 => Right(1L << 2 | 1L)                           // locked, progdone
+    case 0x105 => Right((dutHz * 1000000 / 1e8).toLong)
     case x => rw.get(x).toRight(Status.BadAddr)
   }
 
