@@ -722,8 +722,28 @@ Okablowanie i piny są te same co dla I2S (§9). Zmiana IP to inny bitstream i i
 - **Poprawka po pierwszym biegu:** `FeCheck` indeksował po `List`, co dawało O(n²) i ok. 90 s oceny przy 10^5 próbek (watchdog `HilProgress`). Teraz ocena idzie na `Vector`, a 262 144 ramki zajmują 0,8 s (`fe_harness_param_bounds` pilnuje limitu 20 s).
 - **Poprawka `hw_fe_removal`:** pierwotne kryterium średniej (`< 1 + reszta tonu`, czyli 33 LSB) było za luźne, bo 1000 próbek to niecała liczba okresów 200 Hz. Teraz średnia ogona ma się różnić o mniej niż 1 LSB od reszty samego tonu, policzonej tym samym filtrem w Double na `x` bez offsetu.
 
+**ISE 14.7, `FeHarnessTop_mimas`, XC6SLX9-3CSG324 (po trasowaniu, 0 błędów timingu):**
+
+| Zasób | Zajęte | % | Dla porównania I2S `v32_32` |
+| --- | --- | --- | --- |
+| Slice'y | 760 / 1 430 | 53 % | 79 % |
+| LUT-y | 2 330 / 5 720 | 40 % | 59 % |
+| Rejestry | 1 876 / 11 440 | 16 % | 23 % |
+| LUT-y jako RAM (kolejka do nadajnika powrotnego) | 44 | 3 % | — |
+| RAMB16 / RAMB8 | 0 / 0 | 0 % | RAMB8 1 |
+| DSP48A1 | 0 / 16 | 0 % | — |
+| BUFG, DCM_CLKGEN | 2, 1 | | |
+
+| Domena | Wymaganie | Minimalny okres | Zapas | Najdłuższa ścieżka |
+| --- | --- | --- | --- | --- |
+| `sys` | 10 ns | 7,677 ns | 2,32 ns | most: `addr` → `rdata` (jak w I2S, 5 poziomów logiki) |
+| `dut` | 13,333 ns (75 MHz) | 7,485 ns (133,6 MHz) | 5,85 ns | `HilResetInjector`: `timer` 32 b (12 poziomów logiki) |
+
+- **Filtr przy 75 MHz:** `DcFilter` nie ma najdłuższej ścieżki w domenie `dut`. Wszystkie jego ścieżki są krótsze niż 7,485 ns, więc zapas wobec 13,333 ns to co najmniej 5,85 ns, prawie 44 % okresu. Podział rekurencji na dwa takty (B, C) z README `front_end` wystarcza z dużym zapasem. Filtr nie używa DSP48A1, zgodnie z założeniem kontraktu dla N1.
+- **Miejsce na N2:** w bitstreamie FE zostaje ok. 47 % slice'ów i wszystkie 32 RAMB16. Okno Framera (512 próbek × 18 b) to 1–2 RAMB16, więc N2 zmieści się w tym samym harnessie.
+- **Ostrzeżenia mapy:** `Timing:3159` (DCM bez relacji fazy, domeny rozdziela TIG w UCF, tak samo jak w I2S) i `PhysDesignRules:367` (nieużywane wyjścia LUT-RAM kolejki `StreamFifo`). Żadne z nich nie dotyczy działania.
+
 Zostaje:
-- ISE: zajętość i zapas `TS_dut` przy 13,333 ns do wpisania tutaj.
 - Bitstream FE z czystego drzewa (bez `-dirty`), żeby `HilBench` sprawdzał zgodność bez ostrzeżenia.
 - Przebudowa bitstreamów I2S, żeby `I2sHilTestplan` nie potrzebował `-Dallow_stale=1`.
 
@@ -732,13 +752,12 @@ Zostaje:
 - Symulacja harnessu: `FeHarnessTestplan` 11/11 zielonych, bit w bit przez cały tor (Verilator 5.020). `max |y − float|` = 0,41–0,51 LSB.
 - Host: `FeHilTestplan` bez płytek *canceled*, na atrapach zielony; `HilHostTestplan` 9/9.
 - Firmware: `hil_stream` i `hil_cmd` przechodzą testy na PC (także ASan/UBSan). `fe_role.c` przechodzi sprawdzenie składni na nagłówkach ESP-IDF 5.2.3 (`-Wall -Wextra -Wconversion`). Build `idf.py` i płytka nie były jeszcze uruchamiane.
-- Bitstream: Verilog `FeHarnessTop_mimas` się elaboruje (DCM 3/4 = 75 MHz dokładnie). ISE (zajętość, timing przy 13,33 ns) jeszcze nie był uruchamiany.
+- Bitstream: Verilog `FeHarnessTop_mimas` się elaboruje (DCM 3/4 = 75 MHz dokładnie). ISE: wyniki niżej, w „Wyniki na płytce”.
 
 Do sprawdzenia na stanowisku, zanim uwierzymy wynikom:
 
 - **ESP32 slave full duplex przy BCLK 1,03 MHz i fs 16 053 Hz.** Wcześniej sprawdzony tylko przy 48/44,1 kHz (#9513). Najpierw `hw_link` (selftest w pętli 32/32), potem `hw_fe_chain` z małym `-Dsamples`.
 - **Pakowanie 32/32 w DMA.** Selftest w pętli tego nie rozstrzyga (błąd symetryczny). Rozstrzyga echo `x` w `hw_fe_chain`: N0 ze złym bajtem albo kanałem daje błąd N0, a nie N1.
-- **Timing przy 75 MHz** w ISE: `DcFilter` ma po dwa sumatory 29 b na takt (README `front_end`).
 - Zmiana `HilCounters` i `HilProtocol.scala` jest w źródłach bitstreamu I2S, więc `HilBench` uzna bitstreamy I2S z `af3cd91` za nieaktualne. Treść logiki I2S się nie zmieniła; do przebudowania wystarczy `-Dallow_stale=1`.
 
 ## Źródła
