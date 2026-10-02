@@ -2,6 +2,7 @@ package newhope.frontend
 
 import spinal.core._
 import spinal.core.sim._
+import spinal.lib.{math => _, _}   // bez spinal.lib.math: math.* = scala.math
 import spinal.sim.SimThread
 import scala.util.Random
 import newhope.vertebra._
@@ -9,6 +10,7 @@ import newhope.vertebra.sim.{SimEnv,SimSeed}
 import newhope.core.Conventions
 import FftGolden._
 import FftTestKit._
+import newhope.vertebra.sim.StreamSim._
 
 // Zrodlo: nazwy wlasne. Odrzucone: csr_*, tl_*, intr_*.
 // Wejscie jest Flow (probek z mikrofonu nie da sie wstrzymac), wiec
@@ -29,7 +31,13 @@ object FramerPlan {
     Testpoint("framer_overrun", Stage.V2,
       "Zatkane wyjscie zapala overrun",
       stimulus = Seq("ready = 0 na stale, 3 hopy probek"),
-      checking = Seq("overrun == 1 po nadpisaniu nieodczytanej probki"))
+      checking = Seq("overrun == 1 po nadpisaniu nieodczytanej probki")),
+    Testpoint("framer_reset_clears", Stage.V2,
+      "Reset czysci okno ramki, choc ring (Mem) nie ma resetu",
+      stimulus = Seq("L + hop probek, potem reset z valid = 1 i losowym payloadem przez caly reset",
+                     "po resecie 2 hop probek"),
+      checking = Seq("ramki po resecie == golden liczony od zer (probki sprzed resetu i spod resetu niewidoczne)",
+                     "overrun == 0"))
   ) ++ StreamConformance.testpoints("out")
 
   /** cps: cykle zegara na probke w symulacji. Dolna granica: odczyt ramki
@@ -96,6 +104,7 @@ class FramerTestplan extends TestplanSuite {
           d.io.input.payload #= 0
           d.io.output.ready #= false
           cd.forkStimulus(period = 10)
+          guard()
           StreamConformance.all(cd, StreamPortHandle(d.io.output.valid, d.io.output.ready,
             d.io.output.payload, isInput = false, "out"))
           cd.waitSampling(5)
@@ -112,6 +121,43 @@ class FramerTestplan extends TestplanSuite {
       feed(d, signal(rng, 3 * g.hop), cps).join()
       d.clockDomain.waitSampling(5)
       assert(d.io.overrun.toBoolean, "overrun nie zapalil sie przy zatkanym wyjsciu")
+    }
+
+    // Bez maskowania `fill` pierwsza ramka po resecie niesie probki sprzed
+    // resetu i te zapisane pod resetem. Deterministycznie na obu backendach:
+    // valid = 1 pod resetem steruje testbench, nie losowy stan startowy.
+    scenario("framer_reset_clears") { (d, rng) =>
+      val cd = d.clockDomain
+      d.io.output.ready #= true
+      val got = monitor(d.io.output, cd) { p =>
+        (Cx(p.fragment.re.toLong, p.fragment.im.toLong), p.fragment.exp.toInt, p.last.toBoolean)
+      }
+      val before = signal(rng, L + g.hop)
+      feed(d, before, cps).join()
+      waitFor(cd, got.size >= framer(g, before).size * (L / 2), 20 * L + 1000, "ramki przed resetem")
+      cd.waitSampling(10)
+
+      val hi = 1 << (g.sampleWidth - 1)
+      cd.assertReset()
+      for (_ <- 0 until 20) {
+        d.io.input.valid   #= true
+        d.io.input.payload #= (rng.nextInt(2 * hi) - hi)
+        cd.waitActiveEdge()
+      }
+      d.io.input.valid #= false
+      cd.deassertReset()
+      cd.waitSampling(5)
+      got.clear()
+
+      val after = signal(rng, 2 * g.hop)
+      val exp = framer(g, after).flatMap { f =>
+        f.zipWithIndex.map { case (c, i) => (c, 0, i == L / 2 - 1) }
+      }
+      feed(d, after, cps).join()
+      waitFor(cd, got.size >= exp.size, 20 * L + 1000, s"${exp.size} probek po resecie")
+      cd.waitSampling(10)
+      expectSeq(got, exp, s"Framer $cfgName po resecie")
+      assert(!d.io.overrun.toBoolean, "overrun po resecie")
     }
 
     scenario("out_payload_stable") { (d, rng) => run(d, signal(rng, nSamples), jittery, 2 * cps, rng) }

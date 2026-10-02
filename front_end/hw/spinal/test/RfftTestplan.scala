@@ -8,6 +8,7 @@ import newhope.vertebra.sim.{SimEnv,SimSeed}
 import newhope.core.Conventions
 import FftGolden._
 import FftTestKit._
+import newhope.vertebra.sim.StreamSim._
 
 // Zrodlo: nazwy wlasne. Odrzucone: csr_*, tl_*, intr_*.
 // Test integracyjny: skladowe maja wlasne testplany, tu sprawdzamy
