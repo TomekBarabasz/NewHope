@@ -818,6 +818,7 @@ Firmware ESP32 i okablowanie są te same co w §12.
 
 - Symulacja: `hilFpga/test` 105/105 (I2S + FE, w tym N4 na Verilatorze). Host na atrapach zielony.
 - **Płytka (`mimas`, układ v2): `FeHilTestplan` zielony** (N0 + N1 po zmianie ramki powrotnej).
+- **Płytka (`mimas_n4` z poprawką Framera, build 9f8be2c): `hw_n4_chain` i `hw_n4_reset` zielone, 0 ramek nieweryfikowalnych.** `hw_n4_chain`: 649 ramek, 645 rekordów CRC zgodnych, 4 na końcu nagrania, 40 zrzutów zgodnych. `hw_n4_reset` (8 resetów, 14 ramek powrotnych zgubionych): 649 ramek, 643 CRC zgodne, 38 zrzutów, 3 rekordy rozerwane (1 ramka bez rekordu), 5 na końcu. Bitstream sprzed poprawki padał tu na N2 w pierwszych ramkach odcinków.
 - **Płytka (`mimas_n4`): `FeHilTestplan` zielony**, czyli `hw_fe_*` (N0 + N1 na układzie v2) i `hw_n4_chain`/`hw_n4_reset`. Każda weryfikowalna ramka widma ma CRC zgodne z `FftGolden` na N2, N3 i N4, a zrzuty N4 są zgodne prążek po prążku. Pośrednio potwierdza to też, że zawartość pamięci z `$readmemb` (okno Hanna, twiddle, ROM rozplatania) trafiła do bitstreamu poprawnie, mimo ostrzeżenia ISE o inicjalizacji RAMB8 (`PhysDesignRules:2410`, AR 39999).
 
 `hw_n4_chain` (`-Dsamples` domyślne, 10^5 próbek mowy, `dump_every` 16), bitstream `dafe2d30-dirty`, firmware `dafe2d30`:
@@ -859,7 +860,6 @@ Wnioski:
 
 Zostaje:
 
-- przebudowa `mimas_n4` z poprawką Framera i `hw_n4_chain`/`hw_n4_reset` na płytce (oczekiwane: 0 nieweryfikowalnych);
 - decyzja o rejestrze BRAM → DSP w `FftCore`.
 
 ## Źródła
