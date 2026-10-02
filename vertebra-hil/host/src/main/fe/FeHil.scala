@@ -94,6 +94,6 @@ object FeEsp {
       out ++= got
       progress(out.size.toLong)
     }
-    out.toSeq
+    out.toVector
   }
 }

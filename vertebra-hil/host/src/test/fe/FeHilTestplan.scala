@@ -60,7 +60,7 @@ object FeHilPlan {
     Testpoint("hw_fe_removal", Stage.V2,
       "Offset mikrofonu znika, ton zostaje; uzupelnia dc_removal i dc_golden_vs_float",
       stimulus = Seq("ton 200 Hz, -40 dBFS, na offsecie +0,1 FS; 20 tau + 1000 probek"),
-      checking = Seq("jak hw_fe_chain", "srednia ostatnich 1000 probek wyniku |.| < 1 LSB + reszta tonu",
+      checking = Seq("jak hw_fe_chain", "srednia ostatnich 1000 probek wyniku rozni sie < 1 LSB od reszty samego tonu (float, bez offsetu)",
                      "max |y - float| <= 1 LSB na krzemie")),
 
     Testpoint("hw_fe_bypass", Stage.V2,
@@ -289,12 +289,21 @@ class FeHilTestplan extends HilSuite {
     val n    = (20 * v.fe.dc.tau).toInt + 1000
     val stim = FeStimulus.tone(fs, n, 200, 0.01, 0.1, new Random(13))
     val r    = run(b, "ton 200 Hz + 0,1 FS", stim)
-    val ys   = r.report.ys.slice(r.report.lead.get, r.report.lead.get + n)
+    val k0   = r.report.lead.get
+    val ys   = r.report.ys.slice(k0, k0 + n)
     val tail = ys.takeRight(1000)
     val mean = tail.sum.toDouble / tail.size
-    val residue = 0.01 * ((1L << (v.sampleWidth - 1)) - 1) * (fs / 200) / 1000 / scala.math.Pi
-    info(f"srednia ostatnich 1000 probek $mean%.3f LSB (reszta tonu do $residue%.2f)")
-    assert(scala.math.abs(mean) < 1 + residue, f"DC nie usuniety na krzemie: $mean%.3f LSB")
+    // Reszta samego tonu w sredniej (1000 probek to niecala liczba okresow
+    // 200 Hz): ten sam filtr w Double na x bez offsetu. Offset 0,1 FS jest
+    // staly, wiec po 20 tau zostaje z niego najwyzej ulamek LSB, a cala
+    // reszta sredniej to ton.
+    val xs   = r.report.xs.slice(k0, k0 + n)
+    val off  = scala.math.round(0.1 * (1L << (v.sampleWidth - 1)))
+    val tone = DcGolden.runFloat(v.fe.dc, xs.map(_ - off)).takeRight(1000)
+    val residue = tone.sum / tone.size
+    info(f"srednia ostatnich 1000 probek $mean%.3f LSB, reszta tonu (float, bez offsetu) $residue%.3f LSB, " +
+         f"roznica ${mean - residue}%.3f LSB")
+    assert(scala.math.abs(mean - residue) < 1.0, f"DC nie usuniety na krzemie: srednia $mean%.3f, sam ton $residue%.3f LSB")
   }
 
   hwScenario("hw_fe_bypass") { b =>

@@ -51,7 +51,9 @@ object FeCheck {
     val inf  = scala.collection.mutable.ArrayBuffer[String]()
     def err(s : String) : Unit = if (errs.size < 20) errs += s
 
-    val decoded = raw.flatMap { case (l, r) => FeFrame.decode(l, r, sw) }
+    // Vector: ponizej indeksowanie po pozycji, a nagranie z plytki to 10^5+ ramek
+    // (na List ocena byla O(n^2): 90 s przy 10^5 probek).
+    val decoded = raw.iterator.flatMap { case (l, r) => FeFrame.decode(l, r, sw) }.toVector
     val start   = decoded.indexWhere(o => o.idx == 0 && o.rst)
     if (start < 0) {
       err(s"brak poczatku biegu (ramki idx 0 z rst) w ${decoded.size} ramkach ze znacznikiem, ${raw.size} wszystkich")
@@ -84,7 +86,7 @@ object FeCheck {
       }
     }
     if (lost > 0) inf += s"ramki powrotne zgubione przy resetach DUT-a: $lost"
-    val ok = okB.toSeq
+    val ok = okB.toVector
 
     // --- 4. N1 na odcinkach miedzy resetami -------------------------------
     val cuts = ok.indices.filter(i => ok(i).rst) :+ ok.size
@@ -107,7 +109,7 @@ object FeCheck {
 
     // --- 5. N0: echo x == bodziec ------------------------------------------
     val first = ok.take(cuts.drop(1).headOption.getOrElse(ok.size))
-    val exp   = stim.map(FeFrame.micSample(_, sw))
+    val exp   = stim.iterator.map(FeFrame.micSample(_, sw)).toVector
     def matches(k : Int) : Boolean = first.indices.forall { i =>
       val j = i - k
       j < 0 || (if (j < exp.size) first(i).x == exp(j) else first(i).x == 0)

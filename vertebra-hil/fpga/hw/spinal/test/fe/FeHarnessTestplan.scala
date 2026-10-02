@@ -41,7 +41,8 @@ object FeHarnessPlan {
       "Warianty legalne, ramka powrotna i zegar",
       checking = Seq("kazdy wariant FeHilVariant legalny (polokres SCK > opoznienie nadajnika powrotnego)",
                      "DCM_CLKGEN daje zegar dut wariantu dokladnie (mimas: 75 MHz = 100 * 3 / 4)",
-                     "FeFrame.encode / decode: odwrotne na losowych ramkach, cisza bez znacznika")),
+                     "FeFrame.encode / decode: odwrotne na losowych ramkach, cisza bez znacznika",
+                     "FeCheck na 262 144 ramkach (pelny bufor ESP32) < 20 s")),
     Testpoint("fe_harness_regs", Stage.V1,
       "Identyfikacja, blok IP, SCK/WS przed startem",
       checking = Seq("ip_id == 'FE', variant == kod wariantu",
@@ -300,6 +301,19 @@ class FeHarnessTestplan extends TestplanSuite {
       assert(FeFrame.decode(l, r, sw).contains(o), s"$o -> $l, $r")
     }
     assert(FeFrame.decode(0, 0, sw).isEmpty)
+    // FeCheck na nagraniu wielkosci pelnego bufora ESP32 (hw_fe_long): ma
+    // trwac sekundy, nie minuty (na List ocena byla O(n^2)).
+    val mv   = FeHilVariant.mimas
+    val big  = FeStimulus.noisy(mv.fe.i2s.fs, 262144, rng).toList
+    val xs   = big.map(FeFrame.micSample(_, sw))
+    val ys   = newhope.frontend.DcGolden.run(mv.fe.dc, xs).y
+    val raw  = xs.indices.map(k => FeFrame.encode(FeFrame.Out(k & FeFrame.IdxMask, xs(k), ys(k), k == 0, false, false), sw)).toList
+    val t0   = System.nanoTime
+    val rep  = FeCheck.analyze(mv, big, raw)
+    val sec  = (System.nanoTime - t0) / 1e9
+    info(f"FeCheck: ${raw.size} ramek w $sec%.1f s")
+    assert(rep.ok && rep.frames.size == raw.size, rep.errors.mkString("; "))
+    assert(sec < 20, f"FeCheck za wolny: $sec%.1f s")
     assert(FeFrame.micSample(FeStimulus.word(FeStimulus.MicMin, 0xFF), sw) == -(1L << (sw - 1)))
     assert(FeFrame.micSample(FeStimulus.word(0x00003F, 0xFF), sw) == 0, "bity [5:0] slowa 24 odrzucone")
   }

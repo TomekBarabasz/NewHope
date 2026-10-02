@@ -701,6 +701,32 @@ sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dsamples=2
 
 Okablowanie i piny są te same co dla I2S (§9). Zmiana IP to inny bitstream i inny obraz ESP32; `HilBench` odrzuca płytkę z innym `ip=` z komunikatem, co wgrać.
 
+### Wyniki na płytce (2026-10-02)
+
+`sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`, bitstream `FeHarnessTop_mimas` (build `f950f9dc-dirty`), firmware FE `d719d9f2`. `testplan completeness` daje V1 3/3, V2 3/3 i V3 2/2; wszystkie testpointy są zielone, łącznie z `hw_fe_long`.
+
+| Bieg | Bodziec | Ramki FPGA | `max \|y − float\|` | Uwagi |
+| --- | --- | --- | --- | --- |
+| `hw_fe_chain` | mowa, 10^5 | 103 977 | 0,580 LSB | N0: 100 000 / 100 000 słów zgodnych, przesunięcie 0 |
+| `hw_fe_corners` square | ±FS co próbkę, 20 000 | 24 724 | 0,582 LSB | 19 999 nasyceń wyjścia zgodnych z golden |
+| `hw_fe_corners` step | skok −FS → +FS, 20 000 | 24 740 | 0,579 LSB | 32 nasycenia |
+| `hw_fe_corners` random | losowe 32 b, 20 000 | 24 775 | 0,577 LSB | 321 nasyceń |
+| `hw_fe_removal` | ton 200 Hz + 0,1 FS, 2 706 | 7 410 | 0,580 LSB | średnia ogona −0,311 LSB |
+| `hw_fe_bypass` | mowa, 33 333, okno [11 111, 22 222) | 37 256 | 0,581 LSB | 11 111 ramek w bypassie |
+| `hw_fe_reset` | mowa, 50 000, 10 resetów | 54 773 | 0,580 LSB | 18 ramek powrotnych zgubionych przy resetach (1,8 na reset), `underrun` 3 |
+
+- **Wszystkie biegi:** `y` jest bit w bit zgodne z `DcGolden` liczonym z echa `x`. `overflow` i `dc_overrun` FPGA są zerowe, przepełnień DMA ESP32 nie ma, a `sent` ESP32 jest równe długości bodźca. `underrun` nadajnika powrotnego wynosi 1 na bieg (rozbieg).
+- **N0:** echo `x` równa się `słowo >> 14` dla całego bodźca od pierwszej ramki. Opóźnienie o bit, lewy kanał i obcięcie do 18 bitów są zgodne z niezależnym I2S ESP32-S3.
+- **ESP32-S3 jako slave full duplex** przy BCLK 1,027 MHz i fs 16 053 Hz pracuje bez błędu wyrównania kanałów, także przy 10 przerwach SCK w `hw_fe_reset` (#9513, §11).
+- **Czasy:** `load` 10^5 słów zajmuje 2,4 s (okno 16 linii), `rec` 104 400 ramek 2,4 s, `selftest` 0,3 s, a `ver` 0,53 ms na komendę.
+- **Poprawka po pierwszym biegu:** `FeCheck` indeksował po `List`, co dawało O(n²) i ok. 90 s oceny przy 10^5 próbek (watchdog `HilProgress`). Teraz ocena idzie na `Vector`, a 262 144 ramki zajmują 0,8 s (`fe_harness_param_bounds` pilnuje limitu 20 s).
+- **Poprawka `hw_fe_removal`:** pierwotne kryterium średniej (`< 1 + reszta tonu`, czyli 33 LSB) było za luźne, bo 1000 próbek to niecała liczba okresów 200 Hz. Teraz średnia ogona ma się różnić o mniej niż 1 LSB od reszty samego tonu, policzonej tym samym filtrem w Double na `x` bez offsetu.
+
+Zostaje:
+- ISE: zajętość i zapas `TS_dut` przy 13,333 ns do wpisania tutaj.
+- Bitstream FE z czystego drzewa (bez `-dirty`), żeby `HilBench` sprawdzał zgodność bez ostrzeżenia.
+- Przebudowa bitstreamów I2S, żeby `I2sHilTestplan` nie potrzebował `-Dallow_stale=1`.
+
 ### Stan (2026-10-01)
 
 - Symulacja harnessu: `FeHarnessTestplan` 11/11 zielonych, bit w bit przez cały tor (Verilator 5.020). `max |y − float|` = 0,41–0,51 LSB.
