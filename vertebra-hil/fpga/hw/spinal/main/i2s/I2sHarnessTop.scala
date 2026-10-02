@@ -37,8 +37,19 @@ case class I2sHarnessTop(v : I2sHilVariant,
   }
   noIoPrefix()
 
+  // --- sys: pin -> BUFG jawnie -------------------------------------------
+  // Pin GCLK (V10) zasila tylko dedykowane sciezki: CLKIN DCM i ten BUFG.
+  // Wszystko inne, w tym PROGCLK DCM, bierze zegar z sieci globalnej.
+  // Gdy PROGCLK wisial wprost na pinie, PAR stawial BUFG w miejscu bez
+  // szybkiej sciezki z V10 (Place:1108).
+  val sysBufg = Bufg()
+  sysBufg.io.I := io.clk
+  val sys_clk = Bool()
+  sys_clk.addAttribute("KEEP", "TRUE")
+  sys_clk := sysBufg.io.O
+
   // --- sys: BOOT + reset po wlaczeniu ------------------------------------
-  val bootCd = ClockDomain(io.clk, config = ClockDomainConfig(resetKind = BOOT))
+  val bootCd = ClockDomain(sys_clk, config = ClockDomainConfig(resetKind = BOOT))
   val por = new ClockingArea(bootCd) {
     val cnt = Reg(UInt(4 bits)) init 0
     when(cnt =/= 15) { cnt := cnt + 1 }
@@ -50,8 +61,8 @@ case class I2sHarnessTop(v : I2sHilVariant,
   dcm.io.CLKIN     := io.clk
   dcm.io.RST       := False
   dcm.io.FREEZEDCM := False
-  // PROGCLK = zegar sys: DcmProgrammer w harnessie pracuje w tej domenie.
-  dcm.io.PROGCLK   := io.clk
+  // PROGCLK = zegar sys z BUFG: DcmProgrammer w harnessie pracuje w tej domenie.
+  dcm.io.PROGCLK   := sys_clk
 
   val bufg = Bufg()
   bufg.io.I := dcm.io.CLKFX
@@ -75,7 +86,7 @@ case class I2sHarnessTop(v : I2sHilVariant,
   dcm.io.PROGEN   := h.io.dcm.progEn
   h.io.dcm.locked   := dcm.io.LOCKED
   h.io.dcm.progDone := dcm.io.PROGDONE
-  h.io.sysClk := io.clk
+  h.io.sysClk := sys_clk
   h.io.sysRst := por.rst
   h.io.dutClk := dut_clk
   h.io.dutRst := dutRst.rst
