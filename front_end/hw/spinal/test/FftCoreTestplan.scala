@@ -10,6 +10,7 @@ import newhope.vertebra.sim.{SimEnv,SimSeed}
 import newhope.core.Conventions
 import FftGolden._
 import FftTestKit._
+import newhope.vertebra.sim.StreamSim._
 
 // Zrodlo: brak publicznego testplanu FFT w OpenTitanie; nazwy wlasne,
 // struktura wg TESTING-STRATEGY.md. Numeryka: czat "Implementacja FFT

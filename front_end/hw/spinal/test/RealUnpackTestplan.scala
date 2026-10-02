@@ -9,6 +9,7 @@ import newhope.vertebra.sim.{SimEnv,SimSeed}
 import newhope.core.Conventions
 import FftGolden._
 import FftTestKit._
+import newhope.vertebra.sim.StreamSim._
 
 // Zrodlo: nazwy wlasne (brak publicznego testplanu). Odrzucone: csr_*,
 // tl_*, intr_* - brak rejestrow.
