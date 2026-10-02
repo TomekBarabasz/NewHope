@@ -816,11 +816,37 @@ Firmware ESP32 i okablowanie są te same co w §12.
 
 ### Stan (2026-10-02)
 
-- Symulacja zielona: `FeHarnessTestplan` z N4 (szczegóły w PR). Host na atrapach zielony.
-- Płytka: nie uruchamiana. Do zrobienia:
-  1. ISE dla `FeHarnessTop_mimas_n4`: zajętość (`FftCore` dokłada BRAM i 4 + 1 + 2 DSP48A1) i timing przy 13,333 ns;
-  2. `FeHilTestplan` na `mimas_n4`;
-  3. przebudowa `mimas` (układ v2) i powtórzenie §12.
+- Symulacja: `hilFpga/test` 105/105 (I2S + FE, w tym N4 na Verilatorze). Host na atrapach zielony.
+- **Płytka (`mimas_n4`): `FeHilTestplan` zielony**, czyli `hw_fe_*` (N0 + N1 na układzie v2) i `hw_n4_chain`/`hw_n4_reset`. Każda weryfikowalna ramka widma ma CRC zgodne z `FftGolden` na N2, N3 i N4, a zrzuty N4 są zgodne prążek po prążku. Pośrednio potwierdza to też, że zawartość pamięci z `$readmemb` (okno Hanna, twiddle, ROM rozplatania) trafiła do bitstreamu poprawnie, mimo ostrzeżenia ISE o inicjalizacji RAMB8 (`PhysDesignRules:2410`, AR 39999).
+
+**ISE 14.7, `FeHarnessTop_mimas_n4`, XC6SLX9-3CSG324 (po trasowaniu, 0 błędów timingu):**
+
+| Zasób | Zajęte | % | `mimas` (N0 + N1) |
+| --- | --- | --- | --- |
+| Slice'y | 1 429 / 1 430 | **99 %** | 53 % |
+| LUT-y | 5 551 / 5 720 | **97 %** | 40 % |
+| Rejestry | 3 596 / 11 440 | 31 % | 16 % |
+| LUT-y jako RAM / SRL | 181 / 1 440 | 12 % | 3 % |
+| RAMB16 + RAMB8 | 3 + 4 | 9 % + 6 % | 0 |
+| DSP48A1 | 11 / 16 | 68 % | 0 |
+
+| Domena | Wymaganie | Minimalny okres | Zapas | Najdłuższa ścieżka |
+| --- | --- | --- | --- | --- |
+| `sys` | 10 ns | 9,553 ns | 0,45 ns | most `addr` → `rdata` (jak zawsze; przy zatłoczonym układzie dłuższe trasy) |
+| `dut` | 13,333 ns (75 MHz) | 12,493 ns (80,0 MHz) | **0,84 ns** | `FftCore`: BRAM `mem` → DSP48 (`s2DifI × s2Wi`), 6–8 poziomów logiki; drugi: `RealUnpack` → DSP48 |
+
+Wnioski:
+
+- **Układ jest pełny.** Harness z N0 – N4 zajmuje 99 % slice'ów i 97 % LUT-ów. Kolejnego węzła (bank mel N5, log) nie da się dołożyć do tego bitstreamu. Trzeba będzie odchudzić harness albo testować N5 w osobnym wariancie: zamiast N0 – N4 na krzemie wejście N5 z ramek widma wgrywanych przez PC, albo DUT bez N0 + N1.
+- **Timing FFT przy 75 MHz jest na styk.** To jest wiadomość dla `front_end`, nie dla harnessu. Ścieżka BRAM → mnożenie w `FftCore` ma 0,84 ns zapasu w zatłoczonym układzie. W urządzeniu rozmieszczenie będzie inne, ale ścieżka jest ta sama. Rejestr na wyjściu odczytu pamięci przed DSP48 (o jeden takt dłuższy potok motylka) dałby kilka ns zapasu za kilkadziesiąt rejestrów.
+- **`sys` 0,45 ns zapasu:** najdłuższa ścieżka to znany przypadek z §10 („gdy zapas zejdzie do zera, pierwsza poprawka to rejestr na `rdata`/`status`”). Przy kolejnym dołożeniu logiki trzeba to zrobić.
+- Ostrzeżenia mapy: jak w §12, plus nieużywane wyjścia LUT-RAM w kolejkach `q2`/`q3`, FIFO Framera i `FftCore` oraz `PhysDesignRules:2410` (RAMB8, wyżej). Żadne z nich nie dotyczy działania.
+
+Zostaje:
+
+- liczby z przebiegu na płytce (liczba ramek zweryfikowanych i nieweryfikowalnych, zrzuty, czasy) do tabeli jak w §12;
+- przebudowa `mimas` (v2) i powtórzenie §12;
+- decyzja o `Framer` (zerowanie pierścienia po resecie) i o rejestrze BRAM → DSP w `FftCore`.
 
 ## Źródła
 
