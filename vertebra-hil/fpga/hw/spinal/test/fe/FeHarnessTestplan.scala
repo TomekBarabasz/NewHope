@@ -46,7 +46,7 @@ object FeHarnessPlan {
     Testpoint("fe_harness_regs", Stage.V1,
       "Identyfikacja, blok IP, SCK/WS przed startem",
       checking = Seq("ip_id == 'FE', variant == kod wariantu",
-                     "bypass_from / bypass_to / tail: domyslne, zapis i odczyt, busy w biegu",
+                     "bypass_from / bypass_to / tail / dump_every: domyslne, zapis i odczyt, busy w biegu",
                      "przed pierwszym startem clkOe == 0 i SCK stoi")),
     Testpoint("fe_harness_chain", Stage.V1,
       "Bodziec od ESP32 przez N0 + N1 i z powrotem",
@@ -73,10 +73,28 @@ object FeHarnessPlan {
                      "status.locked (DUT taktuje) gasnie po tail probkach na granicy ramki, clkOe zostaje",
                      "kolejny bieg zaczyna sie od idx 0 z rst",
                      "soft reset: clkOe == 0")),
+    Testpoint("fe_harness_n4_chain", Stage.V1,
+      "N0 -> N4 (Framer 512/160, FftCore, RealUnpack, PowerSpectrum): rekordy CRC i zrzuty",
+      stimulus = Seq("mowa z offsetem, 2200 probek (d8_n4: numeryka 512/160 jak na plytce)", "dump_every 4"),
+      checking = Seq("FeCheck czysty (N0, N1, ramka v2 z kanalem pomocniczym)",
+                     "FeN4Check: kazda weryfikowalna ramka ma rekord CRC zgodny na N2, N3 i N4, poza koncowka nagrania",
+                     "dokladnie 3 pierwsze ramki nieweryfikowalne (pierscien Framera sprzed biegu)",
+                     "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
+                     "n4_frames == ramki golden, n4_aux_drop == n4_order == fr_overrun == 0")),
+    Testpoint("fe_harness_n4_reset", Stage.V1,
+      "Reset DUT-a w trakcie strumienia z N4",
+      stimulus = Seq("2 resety po 100 cykli dut, odstep 700-828 probek, 2600 probek"),
+      checking = Seq("FeN4Check: golden z pierscieniem przechodzacym przez reset, rekordy zgodne, >= 4 zweryfikowane",
+                     "brak rekordu najwyzej dla jednej ramki na reset, rekordy rozerwane tylko przy resetach")),
     Testpoint("fe_harness_mimas", Stage.V2,
       "Wariant plytki (dzielnik 73) w symulacji",
       stimulus = Seq("40 probek mowy"),
-      checking = Seq("FeCheck czysty, liczniki zgodne"))
+      checking = Seq("FeCheck czysty, liczniki zgodne")),
+    Testpoint("fe_harness_n4_bounds", Stage.V1,
+      "Rekordy N4 i warianty z widmem bez symulacji",
+      checking = Seq("mimas_n4 i d8_n4 legalne: Rfft na zegarze i fs I2S, zapas czasu ramki",
+                     "FeN4.crc == CRC32 bit po bicie (wektor znany), rekordy bytes -> parse odwrotne",
+                     "przepustowosc aux: rekord CRC na hop miesci sie z zapasem, zrzut co dump_every ramek nadaza"))
   )
 
   val bg        = HilBridgeGenerics(baud = 1562500L, timeoutUs = 100L)
@@ -94,8 +112,9 @@ class FeHarnessTestplan extends TestplanSuite {
     def w(a : Int, v : Long) : Unit = cli.writeOk(a, v)
     def status : Long = cli.readOk(Addr.Status)
     def setup(bypass : (Long, Long) = (0, 0), tail : Int = FeHilRegs.TailDefault,
-              rst : Option[(Int, Long, Long, Int)] = None) : Unit = {
+              rst : Option[(Int, Long, Long, Int)] = None, dumpEvery : Int = FeHilRegs.DumpEveryDefault) : Unit = {
       w(FeHilRegs.BypassFrom, bypass._1); w(FeHilRegs.BypassTo, bypass._2); w(FeHilRegs.Tail, tail)
+      w(FeHilRegs.DumpEvery, dumpEvery)
       val (cnt, min, mask, len) = rst.getOrElse((0, 0L, 0L, 1))
       w(Addr.RstCount, cnt); w(Addr.RstSeed, 0x5eedL); w(Addr.RstMin, min); w(Addr.RstMask, mask); w(Addr.RstLen, len)
     }
@@ -180,7 +199,8 @@ class FeHarnessTestplan extends TestplanSuite {
     assert(c.readOk(FeHilRegs.BypassFrom) == 0 && c.readOk(FeHilRegs.BypassTo) == 0)
     assert(c.readOk(FeHilRegs.Tail) == FeHilRegs.TailDefault)
     c.writeOk(FeHilRegs.Tail, 7); assert(c.readOk(FeHilRegs.Tail) == 7)
-    assert(c.read(0x103).status == Status.BadAddr)
+    assert(c.readOk(FeHilRegs.DumpEvery) == FeHilRegs.DumpEveryDefault)
+    assert(c.read(0x104).status == Status.BadAddr)
     assert(!e.d.io.i2s.clkOe.toBoolean, "przed startem SCK/WS nie sa wyjsciami")
     val sck0 = mutable.Set[Boolean]()
     for (_ <- 0 until 200) { e.dutCd.waitSampling(); sck0 += e.d.io.i2s.sckOut.toBoolean }
@@ -271,12 +291,81 @@ class FeHarnessTestplan extends TestplanSuite {
     assert(!e.d.io.i2s.clkOe.toBoolean, "po soft resecie SCK/WS w wysokiej impedancji")
   }
 
+  // --- N2 - N4 ---------------------------------------------------------------
+  val d8N4 = FeHilVariant.d8N4
+
+  def n4Check(e : Env, r : FeCheck.Report, c : Map[String, Long]) : FeN4Check.Report = {
+    val n = FeN4Check.analyze(e.v, r)
+    info(s"${e.v.name}: ${n.summary}")
+    n.info.foreach(s => info(s"  $s"))
+    assert(n.ok, n.errors.mkString("\n"))
+    assert(c("n4_aux_drop") == 0 && c("n4_order") == 0 && c("fr_overrun") == 0, s"$c")
+    n
+  }
+
+  // Pierwsze 3 ramki biegu sa nieweryfikowalne (pierscien Framera nie jest
+  // zerowany resetem, FeN4Check). Pierwszy zrzut to ramka nr dump_every = 4
+  // (trig 799) i ma zdazyc wyjsc: 799 + 1291 B + kolejka -> ok. 2150 probek.
+  scenario(d8N4, "fe_harness_n4_chain") { (e, rng) =>
+    val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2200, rng)
+    e.load(stim)
+    e.host.setup(dumpEvery = 4)
+    val c = e.run(stim.size + 20)
+    val r = e.check(stim, 0, c)
+    val n = n4Check(e, r, c)
+    assert(n.unknown == 3 && n.crcRecs + n.missingAtEnd == n.verified && n.crcRecs >= 5 &&
+           n.dumps >= 1 && n.torn == 0, n.summary)
+    assert(c("n4_frames") == n.frames, s"n4_frames ${c("n4_frames")}, golden ${n.frames}")
+    assert(c("n4_crc") >= n.crcRecs && c("n4_dump") >= n.dumps, s"$c")
+  }
+
+  // Odcinki dluzsze niz pierscien (512): pozycje probek zgubionych przy
+  // resecie przestaja byc nieznane, gdy pierscien sie nadpisze.
+  scenario(d8N4, "fe_harness_n4_reset") { (e, rng) =>
+    val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2600, rng)
+    e.load(stim)
+    // ramka 512 cykli dut: resety po 700-828 probkach
+    e.host.setup(rst = Some((2, 700L * 512, 65535L, 100)), dumpEvery = 4)
+    val c = e.run(2600)
+    e.waitUntil((e.host.status & (1L << StatusBit.Locked)) == 0, "koniec tail")
+    assert(c("rst_done") == 2)
+    val r = FeCheck.analyze(d8N4, stim, e.recorded)
+    info(s"d8_n4: ${r.summary}")
+    assert(r.ok && r.resets == 2, r.errors.mkString("\n"))
+    val n = n4Check(e, r, c)
+    assert(n.crcRecs >= 4 && n.missingNearReset <= 2, n.summary)
+  }
+
   scenario(FeHilVariant.mimas, "fe_harness_mimas") { (e, rng) =>
     val stim = FeStimulus.noisy(FeHilVariant.mimas.fe.i2s.fs, 40, rng)
     e.load(stim)
     e.host.setup(tail = 4)
     val c = e.run(stim.size + 4)
     e.check(stim, 0, c)
+  }
+
+  testpoint("fe_harness_n4_bounds") {
+    for (v <- Seq(FeHilVariant.mimasN4, d8N4)) {
+      assert(v.isLegal, s"${v.name}: ${v.problems.mkString("; ")}")
+      val g = v.rfft.get
+      val hopSamples = g.framer.hop
+      info(f"${v.name}: Framer ${g.framer.fftSize}/${g.framer.hop}, ${g.bins} prazkow, ramka zajmuje toru " +
+           f"${g.frameBusyCycles} z ${hopSamples * g.cyclesPerSample} cykli (zapas ${g.marginCycles}), " +
+           s"rekord CRC ${FeN4.CrcLen} B / hop $hopSamples B, zrzut ${FeN4.dumpLen(g.bins)} B")
+      assert(FeN4.CrcLen < hopSamples / 4, "rekord CRC nie miesci sie w hopie z zapasem")
+      // zrzut co dump_every ramek: ramki CRC z tego czasu + zrzut <= dump_every hopow
+      val de = FeHilRegs.DumpEveryDefault
+      assert(FeN4.dumpLen(g.bins) + de * FeN4.CrcLen <= de * hopSamples, s"${v.name}: zrzut co $de ramek nie nadaza")
+      val duringDump = FeN4.dumpLen(g.bins) / hopSamples + 2
+      assert(duringDump * FeN4.CrcLen <= 256, s"kolejka bajtow CRC (256) za mala na $duringDump rekordow w trakcie zrzutu")
+    }
+    // CRC32 (0x04C11DB7, start ~0, bez odbicia, bez XOR koncowego) po bajtach "123456789" = 0x0376E6E7
+    assert(FeN4.crc("123456789".map(_.toLong), 8) == 0x0376E6E7L, f"${FeN4.crc("123456789".map(_.toLong), 8)}%08x")
+    val rng = new Random(3)
+    val c = FeN4.CrcRec(0xABCDEFL, 7, Vector.fill(3)(rng.nextLong() & FeFrame.U32), Vector(0, -3, -6))
+    assert(FeN4.parse(FeN4.bytes(c), 257).contains(c))
+    val d = FeN4.DumpRec(12345L, -6, Vector.fill(257)(rng.nextLong() & ((1L << 36) - 1)))
+    assert(FeN4.parse(FeN4.bytes(d), 257).contains(d))
   }
 
   testpoint("fe_harness_param_bounds") {
@@ -294,9 +383,10 @@ class FeHarnessTestplan extends TestplanSuite {
     val rng = new Random(1)
     val sw  = FeHilVariant.mimas.sampleWidth
     for (_ <- 0 until 1000) {
-      val o = FeFrame.Out(rng.nextInt(1 << FeFrame.TagBits),
+      val o = FeFrame.Out(rng.nextInt(1 << FeFrame.IdxBits),
                           rng.nextInt(1 << sw) - (1 << (sw - 1)), rng.nextInt(1 << sw) - (1 << (sw - 1)),
-                          rng.nextBoolean(), rng.nextBoolean(), rng.nextBoolean())
+                          rng.nextBoolean(), rng.nextBoolean(), rng.nextBoolean(),
+                          if (rng.nextBoolean()) Some((rng.nextBoolean(), rng.nextInt(256))) else None)
       val (l, r) = FeFrame.encode(o, sw)
       assert(FeFrame.decode(l, r, sw).contains(o), s"$o -> $l, $r")
     }

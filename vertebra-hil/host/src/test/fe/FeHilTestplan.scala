@@ -43,7 +43,7 @@ object FeHilPlan {
       stimulus = Seq("esp32: ver, bledne komendy, selftest (petla 32/32 + PSRAM), load/rec z bledami, 50 x ver",
                      "fpga: identyfikacja, scratch, klucze FE, bieg bez partnera"),
       checking = Seq("esp32: ip=fe; err 1, 2, 3, 4 z kodem; load: stim i stim_sum zgodne; brak resetu i obcych linii",
-                     "fpga: ip_id FE, wariant mimas; busy w biegu; status.locked: DUT taktuje w biegu i staje po tail")),
+                     "fpga: ip_id FE, wariant mimas albo mimas_n4; busy w biegu; status.locked: DUT taktuje w biegu i staje po tail")),
 
     Testpoint("hw_fe_chain", Stage.V1,
       "INMP441 (ESP32) -> N0 -> N1 -> ESP32 na krzemie; uzupelnia fe_chain, dc_smoke",
@@ -74,6 +74,21 @@ object FeHilPlan {
       checking = Seq("rst_done == 10, 10 flag rst w nagraniu",
                      "na kazdym odcinku y == DcGolden od stanu zerowego (I2sMicRx i filtr wracaja same)",
                      "przerwy w idx tylko tuz przed flaga rst, najwyzej 2 ramki na reset")),
+
+    Testpoint("hw_n4_chain", Stage.V1,
+      "N0 -> N4 na krzemie (Framer 512/160, FftCore, RealUnpack, PowerSpectrum); bitstream mimas_n4, inaczej canceled",
+      stimulus = Seq("mowa z offsetem DC, -Dsamples probek; dump_every 16"),
+      checking = Seq("jak hw_fe_chain (N0, N1)",
+                     "FeN4Check: rekord CRC zgodny na N2, N3 i N4 dla kazdej weryfikowalnej ramki (poza koncowka nagrania)",
+                     "najwyzej 3 pierwsze ramki nieweryfikowalne (pierscien Framera sprzed biegu)",
+                     "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
+                     "n4_aux_drop == n4_order == fr_overrun == 0")),
+
+    Testpoint("hw_n4_reset", Stage.V2,
+      "Reset DUT-a w trakcie strumienia z N4; bitstream mimas_n4",
+      stimulus = Seq("HilResetInjector: 8 resetow po 500 cykli dut co 50-78 ms (odcinki dluzsze niz pierscien)"),
+      checking = Seq("FeN4Check: golden z pierscieniem Framera przechodzacym przez reset, rekordy zgodne",
+                     "braki rekordow tylko przy resetach (rozerwane, tuz przed resetem)")),
 
     Testpoint("hw_fe_long", Stage.V3,
       "Pelny bufor bodzca (ok. 16 s); bez -Dlong=1 canceled",
@@ -120,6 +135,9 @@ class FeHilTestplan extends HilSuite {
     assert(FeHilRegs.TailDefault >= 2 * 240, "tail krotszy niz dwa deskryptory DMA ESP32")
     for ((name, n) <- Seq("chain" -> samples, "long" -> StimCap, "reset" -> resetSamples, "bypass" -> bypassSamples))
       assert(n <= StimCap && n + 3 * DmaFrames + FeHilRegs.TailDefault <= RecCap, s"$name: $n probek nie miesci sie")
+    val n4 = FeHilVariant.mimasN4
+    assert(n4.isLegal, n4.problems.mkString("; "))
+    info(s"${n4.name}: Framer ${n4.rfft.get.framer.fftSize}/${n4.rfft.get.framer.hop}, zapas toru ${n4.rfft.get.marginCycles} cykli na ramke")
     // ten sam golden co MicFrontEndTestplan / DcFilterTestplan
     assert(v.fe.dc == newhope.frontend.FrontEndGenerics.mimas.dc)
     info(f"filtr: 1 - a = ${v.fe.dc.oneMinusA}%.6f, fc ${v.fe.dc.cutoffEff}%.2f Hz, tau ${v.fe.dc.tau}%.1f probek, " +
@@ -166,7 +184,9 @@ class FeHilTestplan extends HilSuite {
     val retries0 = d.retries
     val i = d.info()
     assert(i == b.fpgaInfo.get && i.ip == "fe", s"$i")
-    assert(FeFpgaMap.variant(i.variant.get).contains(v), s"wariant ${i.variant}")
+    val bv = FeFpgaMap.variant(i.variant.get).getOrElse(fail(s"wariant ${i.variant}"))
+    assert(bv.fe == v.fe, s"wariant ${bv.name}: inne generyki N0 + N1 niz mimas")
+    info(s"wariant ${bv.name}${if (bv.hasN4) " (N0 - N4)" else ""}")
     stopFpga(d)
     val rng = new Random(2)
     for (x <- Seq(0L, 0xFFFFFFFFL, 0xA5A5A5A5L, 0x5A5A5A5AL) ++ Seq.fill(100)(rng.nextLong() & 0xFFFFFFFFL)) {
@@ -205,18 +225,24 @@ class FeHilTestplan extends HilSuite {
 
   case class ResetPlan(count : Int, seed : Long, min : Long, mask : Long, len : Int)
 
-  case class Run(report : FeCheck.Report, fpga : Map[String, Long], esp : HilStat, raw : Seq[(Long, Long)])
+  case class Run(report : FeCheck.Report, fpga : Map[String, Long], esp : HilStat, raw : Seq[(Long, Long)],
+                 n4 : Option[FeN4Check.Report])
+
+  /** Wariant wgranego bitstreamu (N0 + N1 albo N0 - N4). */
+  def boardVariant(b : HilBench) : FeHilVariant =
+    b.fpgaInfo.flatMap(_.variant).flatMap(FeFpgaMap.variant).getOrElse(fail("brak wariantu FPGA"))
 
   /** Jeden bieg: bodziec przez ESP32 -> N0 -> N1 -> ESP32, ocena FeCheck. */
   def run(b : HilBench, what : String, stim : Seq[Long], bypass : (Long, Long) = (0, 0),
-          rst : Option[ResetPlan] = None) : Run = {
+          rst : Option[ResetPlan] = None, dumpEvery : Int = FeHilRegs.DumpEveryDefault) : Run = {
     val (esp, fpga) = (b.esp.get, b.fpga.get)
+    val bv = boardVariant(b)
     try {
       esp.stop(); stopFpga(fpga)
       val r = rst.getOrElse(ResetPlan(0, 0, 0, 0, 1))
       fpga.cfg("bypass_from" -> bypass._1, "bypass_to" -> bypass._2, "tail" -> FeHilRegs.TailDefault,
                "rst_count" -> r.count, "rst_seed" -> f"0x${r.seed}%08x", "rst_min" -> r.min,
-               "rst_mask" -> r.mask, "rst_len" -> r.len)
+               "rst_mask" -> r.mask, "rst_len" -> r.len, "dump_every" -> dumpEvery)
       esp.cfg("fs" -> espFs(v), "rec" -> 1)
       val t0 = System.currentTimeMillis
       FeEsp.load(esp, stim)
@@ -245,7 +271,7 @@ class FeHilTestplan extends HilSuite {
       val raw = FeEsp.record(esp, nrec)
       HilProgress(f"$what: nagranie $nrec ramek odczytane w ${(System.currentTimeMillis - t1) / 1000.0}%.1f s")
 
-      val rep = FeCheck.analyze(v, stim, raw, bypass)
+      val rep = FeCheck.analyze(bv, stim, raw, bypass)
       info(s"$what: ${rep.summary}")
       rep.info.foreach(s => info(s"  $s"))
       if (!rep.ok) fail(s"$what: FeCheck:\n" + rep.errors.mkString("\n"))
@@ -259,7 +285,17 @@ class FeHilTestplan extends HilSuite {
       if (rep.lost == 0)
         assert((fc("x_sum"), fc("y_sum")) == FeCheck.sums(rep.frames), "sumy FPGA != sumy nagrania")
       assert(rep.maxFloatErr <= 1.0, f"max |y - float| = ${rep.maxFloatErr}%.3f LSB")
-      Run(rep, fc, es, raw)
+      // Bitstream z N2 - N4: rekordy widma w kazdym biegu
+      val n4 = if (!bv.hasN4) None else {
+        val n = FeN4Check.analyze(bv, rep)
+        info(s"$what: ${n.summary}")
+        n.info.foreach(x => info(s"  $x"))
+        if (!n.ok) fail(s"$what: FeN4Check:\n" + n.errors.mkString("\n"))
+        assert(fc("n4_aux_drop") == 0 && fc("n4_order") == 0 && fc("fr_overrun") == 0, s"FPGA N4: $fc")
+        assert(fc("n4_frames") >= n.frames, s"n4_frames ${fc("n4_frames")}, golden ${n.frames}")
+        Some(n)
+      }
+      Run(rep, fc, es, raw, n4)
     } finally {
       scala.util.Try(esp.stop()); scala.util.Try(fpga.stop())
     }
@@ -322,6 +358,33 @@ class FeHilTestplan extends HilSuite {
     assert(r.fpga("rst_done") == 10, s"rst_done ${r.fpga("rst_done")}")
     assert(r.report.resets == 10, s"flagi rst w nagraniu: ${r.report.resets}")
     assert(r.report.lost <= 2 * 10, s"zgubione ramki ${r.report.lost}")
+  }
+
+  // -------------------------------------------------------------------
+  //  N2 - N4 (bitstream mimas_n4)
+  // -------------------------------------------------------------------
+  def needN4(b : HilBench) : Unit =
+    assume(boardVariant(b).hasN4, s"plytka ma wariant ${boardVariant(b).name} bez N2 - N4 (wgraj FeHarnessTop_mimas_n4)")
+
+  hwScenario("hw_n4_chain") { b =>
+    needN4(b)
+    val stim = FeStimulus.noisy(fs, samples, new Random(21))
+    val r = run(b, "mowa N0-N4", stim)
+    val n = r.n4.get
+    assert(n.unknown <= 3, s"nieweryfikowalnych ${n.unknown}, oczekiwane <= 3")
+    assert(n.crcRecs + n.missingAtEnd == n.verified && n.crcRecs > 0 && n.torn == 0, n.summary)
+    if (samples >= 20000) assert(n.dumps >= 1, s"zaden zrzut N4: ${n.summary}")
+  }
+
+  hwScenario("hw_n4_reset") { b =>
+    needN4(b)
+    val stim = FeStimulus.noisy(fs, scala.math.max(samples, 60000), new Random(22))
+    // 75 MHz: 3,75 M cykli = 50 ms (800 probek), maska 2^21 - 1 = 28 ms; reset 500 cykli
+    val plan = ResetPlan(8, 0x5eedfe04L, 3750000L, 0x1FFFFFL, 500)
+    val r = run(b, "8 resetow N0-N4", stim, rst = Some(plan))
+    val n = r.n4.get
+    assert(r.fpga("rst_done") == 8 && r.report.resets == 8, s"rst_done ${r.fpga("rst_done")}, flagi ${r.report.resets}")
+    assert(n.crcRecs >= n.verified / 2, s"za malo zweryfikowanych ramek: ${n.summary}")
   }
 
   hwScenario("hw_fe_long") { b =>

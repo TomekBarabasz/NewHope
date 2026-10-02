@@ -15,7 +15,8 @@ import HilProtocol._
 // =====================================================================
 class FakeFeBus(val v : FeHilVariant, val build : String, val fpgaBuild : Long) {
   val fpga = new FakeFpga(v.code, fpgaBuild, "FE", FeHilRegs.counters,
-    Some(Map(FeHilRegs.BypassFrom -> 0L, FeHilRegs.BypassTo -> 0L, FeHilRegs.Tail -> FeHilRegs.TailDefault.toLong)))
+    Some(Map(FeHilRegs.BypassFrom -> 0L, FeHilRegs.BypassTo -> 0L, FeHilRegs.Tail -> FeHilRegs.TailDefault.toLong,
+             FeHilRegs.DumpEvery -> FeHilRegs.DumpEveryDefault.toLong)))
 
   /** Blad DUT-a: y ramki k z odwroconym LSB. */
   var yFault : Option[Int] = None
@@ -23,6 +24,8 @@ class FakeFeBus(val v : FeHilVariant, val build : String, val fpgaBuild : Long) 
   var xFault : Option[Int] = None
   /** Ramka k ginie po drodze do ESP32. */
   var dropAt : Option[Int] = None
+  /** N4: rekord CRC ramki widma nr k ma przeklamane CRC N3 (blad FftCore). */
+  var n3Fault : Option[Int] = None
 
   private val fs = v.fe.i2s.fs
   private def now = System.nanoTime
@@ -79,8 +82,27 @@ class FakeFeBus(val v : FeHilVariant, val build : String, val fpgaBuild : Long) 
     c("sent") = n; c("frames") = n; c("underrun") = 1
     val (xsum, ysum) = FeCheck.sums(outs)
     c("x_sum") = xsum; c("y_sum") = ysum; c("rst_done") = cnt
+    // N2 - N4: rekordy jak ze sprzetu, bajt na ramke od trig + 6 probek
+    val aux = scala.collection.mutable.Map[Int, (Boolean, Int)]()
+    if (v.hasN4 && n > 0) {
+      val recs = FeN4Check.records(v, k => if (k < n) Some(outs(k.toInt).y) else None, 0, n - 1,
+                                   rsts.toSeq.sorted.map(_.toLong), fpga.rw(FeHilRegs.DumpEvery).toInt)
+      var cursor = 0
+      var crcK = 0
+      for ((trig, bytes0) <- recs) {
+        val bytes = if (bytes0.head == FeN4.TypeCrc) {
+          val b = if (n3Fault.contains(crcK)) bytes0.updated(11, bytes0(11) ^ 0x10) else bytes0
+          crcK += 1; b
+        } else bytes0
+        val start = scala.math.max(cursor, trig.toInt + 6)
+        for ((b, i) <- bytes.zipWithIndex if start + i < n) aux(start + i) = (i == 0, b)
+        cursor = start + bytes.size
+      }
+      c("n4_frames") = crcK; c("n4_crc") = crcK; c("n4_dump") = recs.size - crcK
+    }
     val silence = Seq.fill(2)((0L, 0L))
-    val enc = outs.zipWithIndex.filterNot(o => dropAt.contains(o._2)).map(o => FeFrame.encode(o._1, sw))
+    val enc = outs.zipWithIndex.filterNot(o => dropAt.contains(o._2))
+      .map { case (o, k) => FeFrame.encode(o.copy(aux = aux.get(k)), sw) }
     raw = silence ++ enc ++ Seq.fill(fpga.rw(FeHilRegs.Tail).toInt)((0L, 0L))
     recorded = true
   }

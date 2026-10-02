@@ -13,7 +13,7 @@ import newhope.frontend.{DcGenerics, DcGolden}
 //   1. dekodowanie ramek (FeFrame.decode); ramki bez znacznika to cisza
 //   2. poczatek biegu: pierwsza ramka z idx 0 i rst; wczesniejsze ramki
 //      ze znacznikiem to resztki poprzedniego biegu albo smieci z DMA
-//   3. ciaglosc idx (mod 2^14): zgubiona albo zdublowana ramka powrotna;
+//   3. ciaglosc idx (mod 2^8): zgubiona albo zdublowana ramka powrotna;
 //      przerwa dozwolona tylko tuz przed flaga rst (reset DUT-a tnie ramke)
 //   4. N1: y == DcGolden(x) na kazdym odcinku miedzy flagami rst (reset
 //      DUT-a zeruje stan), z y == x tam, gdzie flaga bypass; golden liczy
@@ -32,7 +32,9 @@ object FeCheck {
   /** Jak daleko szukac poczatku bodzca przy diagnozie (8 buforow DMA ESP32 + zapas). */
   val MaxSearch = 4096
 
-  case class Report(frames : Seq[FeFrame.Out], lost : Int, lead : Option[Int], resets : Int, bypassed : Int,
+  /** `abs`: numer kazdej ramki z `frames` od startu (licznik FPGA `frames`;
+    * ramki zgubione przy resetach tez sie licza). */
+  case class Report(frames : Seq[FeFrame.Out], abs : Vector[Long], lost : Int, lead : Option[Int], resets : Int, bypassed : Int,
                     maxFloatErr : Double, info : Seq[String], errors : Seq[String]) {
     def ok : Boolean = errors.isEmpty
     def xs : Seq[Long] = frames.map(_.x)
@@ -59,7 +61,7 @@ object FeCheck {
     val start   = decoded.indexWhere(o => o.idx == 0 && o.rst)
     if (start < 0) {
       err(s"brak poczatku biegu (ramki idx 0 z rst) w ${decoded.size} ramkach ze znacznikiem, ${raw.size} wszystkich")
-      return Report(Nil, 0, None, 0, 0, 0.0, inf.toSeq, errs.toSeq)
+      return Report(Nil, Vector.empty, 0, None, 0, 0, 0.0, inf.toSeq, errs.toSeq)
     }
     if (start > 0) inf += s"pominiete $start ramek ze znacznikiem przed poczatkiem biegu"
     val fr = decoded.drop(start)
@@ -70,12 +72,13 @@ object FeCheck {
     // tuz przed ramka z flaga rst (najwyzej MaxLostAtReset ramek pomiedzy);
     // licznik `frames` FPGA liczy te ramki, nagranie nie.
     val okB  = scala.collection.mutable.ArrayBuffer[FeFrame.Out]()
+    val absB = scala.collection.mutable.ArrayBuffer[Long]()
     var lost = 0
     var i    = 0
     var want  = 0
     var broken = false
     while (i < fr.size && !broken) {
-      if (fr(i).idx == (want & FeFrame.IdxMask)) { okB += fr(i); want += 1; i += 1 }
+      if (fr(i).idx == (want & FeFrame.IdxMask)) { okB += fr(i); absB += want; want += 1; i += 1 }
       else (i to scala.math.min(i + MaxLostAtReset, fr.size - 1)).find(j => fr(j).rst && j > 0) match {
         case Some(j) =>
           val skip = (fr(j).idx - want) & FeFrame.IdxMask
@@ -158,7 +161,7 @@ object FeCheck {
       }
     }
 
-    Report(ok, lost, lead, resets, bypassed, maxFloat, inf.toSeq, errs.toSeq)
+    Report(ok, absB.toVector, lost, lead, resets, bypassed, maxFloat, inf.toSeq, errs.toSeq)
   }
 
   /** Sumy licznikow FPGA (x_sum, y_sum) z nagrania: u32 sum wartosci ze znakiem. */

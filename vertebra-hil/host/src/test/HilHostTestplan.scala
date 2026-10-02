@@ -63,7 +63,9 @@ object HilHostPlan {
       stimulus = Seq("FeHilTestplan z HilBench na FakeFeBus (load, rec, liczniki FE; nagranie z DcGolden)",
                      "drugi bieg: przeklamane y ramki 500, echo x ramki 700, zgubiona ramka 900"),
       checking = Seq("czysty bieg: hw_link, hw_param_bounds, hw_fe_* przechodza, hw_fe_long canceled bez -Dlong",
-                     "bieg z bledami: hw_fe_chain failed, komunikat nazywa ramke 500 (DcGolden), N0 i przerwe idx")))
+                     "bieg z bledami: hw_fe_chain failed, komunikat nazywa ramke 500 (DcGolden), N0 i przerwe idx",
+                     "wariant mimas_n4: hw_n4_* przechodza; przeklamane CRC N3 -> failed z nazwa wezla",
+                     "wariant mimas: hw_n4_* canceled")))
 }
 
 class HilHostTestplan extends TestplanSuite {
@@ -304,9 +306,9 @@ class HilHostTestplan extends TestplanSuite {
   }
 
   /** FeHilTestplan na FakeFeBus. */
-  def runFeOnFakes(setup : FakeFeBus => Unit) : Map[String, String] = {
+  def runFeOnFakes(setup : FakeFeBus => Unit, v : FeHilVariant = FeHilVariant.mimas) : Map[String, String] = {
     val h   = head.getOrElse("00000000")
-    val bus = new FakeFeBus(FeHilVariant.mimas, h, java.lang.Long.parseLong(h, 16) & ~1L)
+    val bus = new FakeFeBus(v, h, java.lang.Long.parseLong(h, 16) & ~1L)
     setup(bus)
     val b = HilBench.open(FeHil, HilBenchOpts(Some("E" -> "t"), Some("F" -> "t"), allowStale = true),
                           opener(Map("E" -> bus.esp.port, "F" -> bus.fpga.port)))
@@ -330,7 +332,19 @@ class HilHostTestplan extends TestplanSuite {
     assert(chain.startsWith("FAILED"), chain)
     assert(chain.contains("ramka 500 (odcinek od 0, probka 500)") && chain.contains("DcGolden"), chain)
     assert(chain.contains("N0: echo x nie pasuje") && chain.contains("ramka 700"), chain)
-    assert(chain.contains("ramka 900: idx 901, oczekiwany 900"), chain)
+    assert(chain.contains("ramka 900: idx 133, oczekiwany 132"), chain)
+
+    // bitstream z N2 - N4
+    val n4 = runFeOnFakes(_ => (), FeHilVariant.mimasN4)
+    for (n <- Seq("hw_link (fpga)", "hw_fe_chain", "hw_fe_reset", "hw_n4_chain", "hw_n4_reset")) {
+      info(s"mimas_n4 $n: ${result(n4, n)}")
+      assert(result(n4, n) == "ok", s"mimas_n4 $n: ${result(n4, n)}")
+    }
+    val n3bad = runFeOnFakes(_.n3Fault = Some(5), FeHilVariant.mimasN4)
+    val n4c = result(n3bad, "hw_n4_chain")
+    info(s"hw_n4_chain z bledem N3: ${n4c.take(400)}")
+    assert(n4c.startsWith("FAILED") && n4c.contains("N3 CRC") && n4c.contains("(N2 zgodny)"), n4c)
+    assert(result(runFeOnFakes(_ => ()), "hw_n4_chain").startsWith("canceled"), "bitstream bez N4: hw_n4_* canceled")
   }
 
   /** I2sHilTestplan na FakeI2sBus; zwraca wynik kazdego testu po nazwie. */

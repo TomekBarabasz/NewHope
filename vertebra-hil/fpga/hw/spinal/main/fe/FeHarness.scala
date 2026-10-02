@@ -3,14 +3,14 @@ package newhope.vertebra.hil.fe
 import spinal.core._
 import spinal.lib._
 import spinal.lib.com.uart._
-import newhope.frontend.MicFrontEnd
+import newhope.frontend.{MicFrontEnd, PowerSpectrum, Rfft}
 import newhope.i2s.{I2sFrame, I2sSlave}
 import newhope.vertebra.hil._
 import HilProtocol._
 
 // =====================================================================
-//  Harness frontendu N0 + N1 bez zegarow i IO plytki
-//  (vertebra-hil.md §12, contract/fe/commands.md).
+//  Harness frontendu N0 + N1 (opcjonalnie N2 - N4) bez zegarow i IO
+//  plytki (vertebra-hil.md §12, §13, contract/fe/commands.md).
 //
 //  DUT to MicFrontEnd (I2sMicRx + DcFilter), dokladnie ten blok, ktory
 //  trafi do urzadzenia. FPGA jest masterem I2S: SCK/WS daje I2sMicRx
@@ -18,6 +18,11 @@ import HilProtocol._
 //
 //    SD_IN  -> MicFrontEnd -> (y, x) -> kolejka -> I2sSlave.tx -> SD_OUT
 //    SCK/WS z MicFrontEnd -> piny i wejscia I2sSlave (nadajnik powrotny)
+//
+//  Wariant z N4: za MicFrontEnd stoja Rfft (Framer + FftCore + RealUnpack)
+//  i PowerSpectrum, w tej samej domenie resetu co DUT. FeN4Tap liczy CRC
+//  ramek na N2 (wyjscie Framera), N3 i N4 i wysyla rekordy kanalem
+//  pomocniczym ramki powrotnej (bajt na probke).
 //
 //  Nadajnik powrotny to I2sSlave z newhope.i2s zegarowany wewnetrznym
 //  SCK/WS DUT-a: ESP32 jako slave odbiera wynik na tym samym zegarze,
@@ -115,7 +120,15 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
     val active   = running || draining
 
     val rstDut = RegNext(!active || clearing || inj.io.dutReset) init True
-    val front  = ClockDomain(io.dutClk, rstDut, config = dutCd.config)(new MicFrontEnd(v.fe))
+    val dutDom = ClockDomain(io.dutClk, rstDut, config = dutCd.config)
+    val front  = dutDom(new MicFrontEnd(v.fe))
+    val rfft   = v.rfft.map(g => dutDom(new Rfft(g)))
+    val power  = v.rfft.map(g => dutDom(new PowerSpectrum(g.core.dataWidth, g.core.expWidth)))
+    for (r <- rfft; p <- power) {
+      r.io.input << front.io.output
+      p.io.input << r.io.output
+      p.io.output.ready := True                    // widmo opróżniane na biezaco, Framer bez backpressure
+    }
 
     // Nadajnik powrotny: reset tylko przy starcie i soft resecie, reset
     // DUT-a z injectora go nie dotyczy (to harness, nie DUT).
@@ -148,14 +161,41 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
     val rstSeen = RegInit(False)                  // reset DUT-a od ostatniej wyslanej ramki
     when(inj.io.dutReset) { rstSeen := True }
 
-    val outIdx = Reg(UInt(FeFrame.TagBits bits)) init 0
+    val outIdx = Reg(UInt(FeFrame.IdxBits bits)) init 0
     val y      = front.io.output.payload
     val fwd    = running && front.io.output.valid
+    val frames = Reg(UInt(32 bits)) init 0
+
+    // --- N2 - N4: CRC i zrzut, bajty kanalem pomocniczym ---------------
+    val n4 = v.rfft.map { g =>
+      val t   = FeN4Tap(g)
+      val r   = rfft.get
+      val fr  = r.framer.io.output.pull()
+      t.io.start     := go
+      t.io.dutRst    := rstDut
+      t.io.n2.valid  := fr.fire
+      t.io.n2.payload := fr.payload
+      t.io.n3.valid  := r.io.output.fire
+      t.io.n3.payload := r.io.output.payload
+      t.io.n4.valid  := power.get.io.output.fire
+      t.io.n4.payload := power.get.io.output.payload
+      t.io.trig      := (frames - 1).resize(24)
+      t.io.dumpEvery := ic.dumpEvery
+      t.io.aux.ready := fwd
+      t
+    }
+    val frOverrun = RegInit(False)
+    for (r <- rfft) when(running && r.io.overrun) { frOverrun := True }
+    val auxValid = n4.fold(False)(_.io.aux.valid)
+    val auxWord  = n4.fold(B(0, 9 bits))(_.io.aux.payload)
+    val overrunAny = front.io.dcOverrun || frOverrun
 
     val frame = I2sFrame(FeFrame.SlotBits)
-    frame.left  := (y.asBits ## B(0, FeFrame.SlotBits - sw - FeFrame.TagBits bits) ## outIdx.asBits)
-    frame.right := (lastX.asBits ## B(0, FeFrame.SlotBits - sw - FeFrame.TagBits bits) ##
-                    rstSeen ## bypass ## front.io.dcOverrun ## B(FeFrame.Marker, FeFrame.MarkerBits bits))
+    frame.left  := (y.asBits ## B(0, FeFrame.MaxSampleWidth - sw bits) ## outIdx.asBits ##
+                    rstSeen ## bypass ## overrunAny ## auxValid ## (auxValid && auxWord(8)) ## False)
+    frame.right := (lastX.asBits ## B(0, FeFrame.MaxSampleWidth - sw bits) ##
+                    Mux(auxValid, auxWord(7 downto 0), B(0, 8 bits)) ## B(FeFrame.Marker, FeFrame.MarkerBits bits))
+    require(frame.left.getWidth == 32 && frame.right.getWidth == 32)
 
     val queue = StreamFifo(I2sFrame(FeFrame.SlotBits), 4)
     queue.io.flush       := clearing
@@ -165,7 +205,6 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
 
     // --- liczniki ------------------------------------------------------
     val sent      = Reg(UInt(32 bits)) init 0
-    val frames    = Reg(UInt(32 bits)) init 0
     val underrun  = Reg(UInt(32 bits)) init 0
     val overflow  = Reg(UInt(32 bits)) init 0
     val xSum      = Reg(UInt(32 bits)) init 0
@@ -195,11 +234,14 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
 
     when(go) {
       sent := 0; frames := 0; underrun := 0; overflow := 0; xSum := 0; ySum := 0
-      outIdx := 0; inIdx := 0; rstSeen := True
+      outIdx := 0; inIdx := 0; rstSeen := True; frOverrun := False
     }
 
+    def n4w(f : FeN4Tap => UInt) : Bits = n4.fold(B(0, 32 bits))(t => f(t).asBits)
     val words = Seq[Bits](sent.asBits, frames.asBits, underrun.asBits, overflow.asBits,
-                          front.io.dcOverrun.asBits.resize(32), xSum.asBits, ySum.asBits, inj.io.done.asBits)
+                          front.io.dcOverrun.asBits.resize(32), xSum.asBits, ySum.asBits, inj.io.done.asBits,
+                          n4w(_.io.frames), n4w(_.io.crcRecs), n4w(_.io.dumps), n4w(_.io.drops), n4w(_.io.order),
+                          frOverrun.asBits.resize(32))
     require(words.size == FeHilRegs.counters.size)
     counters.io.dutStop := stopDut
     for ((w, i) <- words.zipWithIndex) counters.io.dutWords(i) := w
@@ -208,7 +250,7 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
 
     // do statusu: rejestry w dut, w sys przez BufferCC
     val dutRunning = RegNext(active && !rstDut) init False
-    val anyError   = RegNext(overflow =/= 0 || front.io.dcOverrun) init False
+    val anyError   = RegNext(overflow =/= 0 || overrunAny || n4w(_.io.drops) =/= 0 || n4w(_.io.order) =/= 0) init False
   }
 
   // --- status i diody (sys) -----------------------------------------------

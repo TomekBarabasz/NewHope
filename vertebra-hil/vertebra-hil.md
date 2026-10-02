@@ -644,6 +644,8 @@ Otwarte pytania:
 
 ## 12. Frontend N0 + N1 (I2S RX z INMP441 i filtr DC)
 
+> Od §13 ramka powrotna ma układ v2 (`idx` 8 b, znacznik `0x2D` na końcu prawego slotu, kanał pomocniczy). Opis ramki niżej i wyniki z 2026-10-02 dotyczą układu v1; aktualny kontrakt: `contract/fe/commands.md`.
+
 Drugie IP na stanowisku, przed I2C. DUT to `MicFrontEnd` z `front_end`: N0 `I2sMicRx` (master I2S, 75 MHz / 73 / 64 = 16 053 Hz, lewy kanał, `słowo24[23:6]`) i N1 `DcFilter` (`y = x − x1 + a·y1`, bez DSP). Kontrakt jest w `contract/fe/commands.md`.
 
 ### Po co i co sprawdzamy
@@ -759,6 +761,66 @@ Do sprawdzenia na stanowisku, zanim uwierzymy wynikom:
 - **ESP32 slave full duplex przy BCLK 1,03 MHz i fs 16 053 Hz.** Wcześniej sprawdzony tylko przy 48/44,1 kHz (#9513). Najpierw `hw_link` (selftest w pętli 32/32), potem `hw_fe_chain` z małym `-Dsamples`.
 - **Pakowanie 32/32 w DMA.** Selftest w pętli tego nie rozstrzyga (błąd symetryczny). Rozstrzyga echo `x` w `hw_fe_chain`: N0 ze złym bajtem albo kanałem daje błąd N0, a nie N1.
 - Zmiana `HilCounters` i `HilProtocol.scala` jest w źródłach bitstreamu I2S, więc `HilBench` uzna bitstreamy I2S z `af3cd91` za nieaktualne. Treść logiki I2S się nie zmieniła; do przebudowania wystarczy `-Dallow_stale=1`.
+
+## 13. Frontend N0 – N4 (Framer, FFT, widmo mocy)
+
+Ten sam harness co w §12, z dłuższym DUT-em: `MicFrontEnd` → `Rfft` (Framer 512/160, `FftCore` n = 256, `RealUnpack`) → `PowerSpectrum`, w domenie resetu DUT-a, jak w urządzeniu. Wariant bitstreamu to `mimas_n4` (`FeHarnessTop_mimas_n4`); wariant `mimas` z §12 zostaje. Kontrakt: `contract/fe/commands.md`, „N2 – N4”.
+
+### Przepustowość: dlaczego CRC, a nie dane
+
+Na każdym węźle (N2: 256 par, N3: 257 prążków zespolonych, N4: 257 × `p` uint36) ramka widma ma ok. 9,2 kbit co `hop` = 160 próbek. Powrót I2S ma 64 b na próbkę, z czego `y`, `x` i znaczniki zajmują większość. Pominięcie Framera nie zmniejsza danych: moc liczona jest dokładnie (36 b), więc ma tyle bitów co para zespolona.
+
+Ramka widma jest jednak deterministyczną funkcją strumienia `y`, który i tak wraca. Host liczy golden sam (`FftGolden`), a FPGA przesyła tylko dowód zgodności:
+- **CRC32 każdej ramki na N2, N3 i N4** (rekord 23 B na hop). Pokrywa 100 % ramek, a przy rozjeździe nazywa pierwszy niezgodny węzeł: Framer, `FftCore`/`RealUnpack` albo `PowerSpectrum`.
+- **Pełne widmo mocy co `dump_every` ramek** (rekord 1291 B, domyślnie co 16.). Służy do diagnozy prążek po prążku.
+
+Rekordy jadą kanałem pomocniczym ramki powrotnej: 8 b na próbkę, czyli 160 B na hop. Żeby go zrobić, ramka przeszła na układ v2: `idx` 8 b i znacznik `0x2D` 6 b, a znacznik jest na końcu prawego slotu. Wariant `mimas` też używa v2, więc §12 trzeba powtórzyć na nowym bitstreamie.
+
+### Co doszło
+
+| Warstwa | Nowe |
+| --- | --- |
+| FPGA | `FeN4Tap`: CRC32 (36 b na cykl) na N2/N3/N4, kolejki ramek N2/N3, kolejka bajtów CRC (256 B), bufor zrzutu (257 × 36 b), arbiter rekordów. `FeHilVariant.rfft`, wariant `mimas_n4`, rejestr `dump_every` (`0x103`), liczniki `n4_*` i `fr_overrun` (`0x018`–`0x01D`) |
+| Wspólne Scala | `FeN4`: CRC, układ i parsowanie rekordów (harness i host) |
+| Ocena | `FeN4Check`: sklejanie rekordów, golden z modelem pierścienia Framera, porównanie CRC i zrzutów, kompletność |
+| Host | `hw_n4_chain` (V1), `hw_n4_reset` (V2). Na bitstreamie `mimas_n4` każdy bieg `hw_fe_*` sprawdza też N2–N4. Na `mimas` testy N4 są *canceled* |
+| Atrapy | `FakeFeBus` z rekordami N4 i wstrzykiwanym błędem CRC N3 |
+| ESP32 | bez zmian (nagrywa ramki 32/32 jak w §12) |
+
+### Co pokazała symulacja harnessu
+
+- **Pierścień Framera nie jest zerowany resetem.** `Framer.scala` mówi „przed pierwszymi fftSize próbkami bufor zawiera zera”, ale to prawda tylko po konfiguracji układu. Po resecie DUT-a (start biegu, soft reset, `HilResetInjector`, a w urządzeniu każdy restart toru) pierwsze 3 ramki zawierają próbki sprzed resetu. W symulacji była to jedna pozycja ze śmieciami sprzed resetu domeny. Na płytce będą to próbki poprzedniego biegu. Golden w `FeN4Check` modeluje to jak sprzęt: pierścień przechodzi przez reset, a pozycje nieznane hostowi robią ramkę nieweryfikowalną. **Do decyzji w `front_end`:** zostawić i poprawić komentarz, albo maskować w Framerze odczyt pozycji niezapisanych od resetu (licznik zapełnienia, kilka LUT-ów). Wtedy golden przejdzie na „zera po resecie”, a 3 pierwsze ramki staną się weryfikowalne.
+- **Rozjazd par N2/N3 z N4 o jedną ramkę.** `PowerSpectrum` kończy ramkę cykl po `Rfft`, a wpis N3 jest widoczny na wyjściu `StreamFifo` dopiero po 1–2 cyklach. `FeN4Tap` obsługuje teraz koniec ramki N4 3 cykle później, na zatrzaśniętych wartościach.
+- **Znacznik ramki musi być na jej końcu.** Pierwsza wersja v2 miała znacznik w lewym slocie, który idzie pierwszy. Ramka ucięta resetem w prawym slocie przechodziła wtedy dekodowanie z wyzerowanym końcem `x`.
+
+### Testy
+
+- `FeHarnessTestplan` (symulacja, wariant `d8_n4`: dzielnik 8, ale Framer 512/160 jak na płytce):
+  - `fe_harness_n4_bounds` (bez symulacji): CRC-32/MPEG-2 na wektorze „123456789” = `0x0376E6E7`, rekordy w obie strony, przepustowość kanału;
+  - `fe_harness_n4_chain`: 2200 próbek, `dump_every` 4, każda weryfikowalna ramka zgodna na 3 węzłach, zrzut N4 zgodny;
+  - `fe_harness_n4_reset`: 2 resety, golden z pierścieniem przez reset;
+  - stare scenariusze N0 + N1 na układzie v2.
+- `HilHostTestplan.host_fe_on_fakes`: dodatkowo `FeHilTestplan` na atrapie `mimas_n4`, przekłamane CRC N3 → komunikat „N3 CRC …, golden … (N2 zgodny)”, a na wariancie `mimas` testy N4 *canceled*.
+
+### Uruchamianie
+
+```
+sbt "hilFpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog mimas_n4"     # Verilog -> ISE z hw/fe_harness.ucf
+sbt "hilFpga/testOnly *FeHarnessTestplan -- -z n4"                              # symulacja N4
+sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"           # na plytce mimas_n4: hw_fe_* + hw_n4_*
+```
+
+Firmware ESP32 i okablowanie są te same co w §12.
+
+**ISE:** `FeHarnessTop_mimas_n4.v` czyta zawartość pamięci przez `$readmemb` z plików obok niego w `hw/gen` (`FeHarnessTop_mimas_n4.v_toplevel_h_dut_rfft_*.bin`: okno Hanna, twiddle, ROM rozplatania, zerowy pierścień). Do VM z ISE trzeba skopiować je razem z `.v`, do tego samego katalogu. Bez nich XST zainicjuje pamięci zerami, a FFT policzy bzdury. Pliki są wynikiem budowania (`.gitignore`), jak sam Verilog.
+
+### Stan (2026-10-02)
+
+- Symulacja zielona: `FeHarnessTestplan` z N4 (szczegóły w PR). Host na atrapach zielony.
+- Płytka: nie uruchamiana. Do zrobienia:
+  1. ISE dla `FeHarnessTop_mimas_n4`: zajętość (`FftCore` dokłada BRAM i 4 + 1 + 2 DSP48A1) i timing przy 13,333 ns;
+  2. `FeHilTestplan` na `mimas_n4`;
+  3. przebudowa `mimas` (układ v2) i powtórzenie §12.
 
 ## Źródła
 
