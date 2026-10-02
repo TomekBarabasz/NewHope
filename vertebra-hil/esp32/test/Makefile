@@ -24,7 +24,14 @@ $(BUILD)/test_hil_stream: test_hil_stream.c $(STR)/hil_stream.c $(STR)/include/h
 	@mkdir -p $(BUILD)
 	$(CC) $(CFLAGS) -o $@ test_hil_stream.c $(STR)/hil_stream.c
 
-run: $(BUILD)/test_hil_pattern $(BUILD)/test_hil_cmd $(BUILD)/test_hil_stream
+# Wszystkie komponenty bez ESP-IDF w jednym programie, jak w firmware: dwa
+# komponenty z tym samym symbolem globalnym (hil_xorshift32, d719d9f) linkuja
+# sie osobno w testach, a w idf.py juz nie.
+$(BUILD)/link_all: link_all.c $(PAT)/hil_pattern.c $(PAT)/hil_vectors.c $(STR)/hil_stream.c $(CMD)/hil_cmd_core.c
+	@mkdir -p $(BUILD)
+	$(CC) $(CFLAGS) -o $@ $^
+
+run: $(BUILD)/test_hil_pattern $(BUILD)/test_hil_cmd $(BUILD)/test_hil_stream $(BUILD)/link_all
 	./$(BUILD)/test_hil_pattern $(VECTORS)
 	./$(BUILD)/test_hil_cmd
 	./$(BUILD)/test_hil_stream
