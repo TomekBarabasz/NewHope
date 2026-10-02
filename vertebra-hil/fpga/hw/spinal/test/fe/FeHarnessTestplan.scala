@@ -78,13 +78,13 @@ object FeHarnessPlan {
       stimulus = Seq("mowa z offsetem, 2200 probek (d8_n4: numeryka 512/160 jak na plytce)", "dump_every 4"),
       checking = Seq("FeCheck czysty (N0, N1, ramka v2 z kanalem pomocniczym)",
                      "FeN4Check: kazda weryfikowalna ramka ma rekord CRC zgodny na N2, N3 i N4, poza koncowka nagrania",
-                     "dokladnie 3 pierwsze ramki nieweryfikowalne (pierscien Framera sprzed biegu)",
+                     "wszystkie ramki weryfikowalne (Framer: zera w miejsce pozycji niezapisanych od resetu)",
                      "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
                      "n4_frames == ramki golden, n4_aux_drop == n4_order == fr_overrun == 0")),
     Testpoint("fe_harness_n4_reset", Stage.V1,
       "Reset DUT-a w trakcie strumienia z N4",
       stimulus = Seq("2 resety po 100 cykli dut, odstep 700-828 probek, 2600 probek"),
-      checking = Seq("FeN4Check: golden z pierscieniem przechodzacym przez reset, rekordy zgodne, >= 4 zweryfikowane",
+      checking = Seq("FeN4Check: golden z pierscieniem zer po kazdym resecie, rekordy zgodne, >= 4 zweryfikowane",
                      "brak rekordu najwyzej dla jednej ramki na reset, rekordy rozerwane tylko przy resetach")),
     Testpoint("fe_harness_mimas", Stage.V2,
       "Wariant plytki (dzielnik 73) w symulacji",
@@ -303,8 +303,8 @@ class FeHarnessTestplan extends TestplanSuite {
     n
   }
 
-  // Pierwsze 3 ramki biegu sa nieweryfikowalne (pierscien Framera nie jest
-  // zerowany resetem, FeN4Check). Pierwszy zrzut to ramka nr dump_every = 4
+  // Framer po resecie podaje zera zamiast pozycji niezapisanych, wiec
+  // golden zna kazda ramke. Pierwszy zrzut to ramka nr dump_every = 4
   // (trig 799) i ma zdazyc wyjsc: 799 + 1291 B + kolejka -> ok. 2150 probek.
   scenario(d8N4, "fe_harness_n4_chain") { (e, rng) =>
     val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2200, rng)
@@ -313,14 +313,14 @@ class FeHarnessTestplan extends TestplanSuite {
     val c = e.run(stim.size + 20)
     val r = e.check(stim, 0, c)
     val n = n4Check(e, r, c)
-    assert(n.unknown == 3 && n.crcRecs + n.missingAtEnd == n.verified && n.crcRecs >= 5 &&
+    assert(n.unknown == 0 && n.crcRecs + n.missingAtEnd == n.frames && n.crcRecs >= 5 &&
            n.dumps >= 1 && n.torn == 0, n.summary)
     assert(c("n4_frames") == n.frames, s"n4_frames ${c("n4_frames")}, golden ${n.frames}")
     assert(c("n4_crc") >= n.crcRecs && c("n4_dump") >= n.dumps, s"$c")
   }
 
-  // Odcinki dluzsze niz pierscien (512): pozycje probek zgubionych przy
-  // resecie przestaja byc nieznane, gdy pierscien sie nadpisze.
+  // Kazdy odcinek od pierscienia zer; ramki tuz przed resetem moga nie
+  // zdazyc albo miec w oknie probki zgubione przy resecie (bez golden).
   scenario(d8N4, "fe_harness_n4_reset") { (e, rng) =>
     val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2600, rng)
     e.load(stim)

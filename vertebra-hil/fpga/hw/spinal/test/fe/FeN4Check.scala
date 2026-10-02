@@ -11,13 +11,12 @@ import newhope.frontend.{Bfp, FftGolden}
 //   1. sklejanie rekordow z bajtow aux kolejnych ramek FeCheck (sof otwiera
 //      rekord, dlugosc z typu); przerwa w abs (ramki zgubione przy resecie)
 //      albo sof w srodku rekordu = rekord rozerwany
-//   2. golden jak sprzet: pierscien Framera to Mem bez resetu, wiec jego
-//      zawartosc przechodzi przez reset DUT-a, a zeruja sie tylko wskaznik
-//      zapisu i licznik hop. Ramka f odcinka (od flagi rst) ma trig = abs
-//      probki (f + 1) * hop - 1 i okno z ostatnich fftSize zapisow. Pozycje
-//      nieznane (sprzed biegu - inny bieg albo stan po konfiguracji -
-//      i probki zgubione przy resecie) robia ramke nieweryfikowalna.
-//      Potem FftGolden.rfftFrame i power.
+//   2. golden jak sprzet: Framer po kazdym resecie podaje zera w miejsce
+//      pozycji niezapisanych od resetu (licznik fill), wiec kazdy odcinek
+//      (od flagi rst) startuje z pierscieniem zer. Ramka f odcinka ma
+//      trig = abs probki (f + 1) * hop - 1 i okno z ostatnich fftSize
+//      zapisow. Probki zgubione przy resecie (koniec odcinka przed flaga
+//      rst) robia ramke nieweryfikowalna. Potem FftGolden.rfftFrame i power.
 //   3. rekord CRC: flagi == 7, CRC i wykladnik N2, N3, N4 == golden
 //      (rozjazd nazywa pierwszy niezgodny wezel); rekord dla trig, ktorego
 //      golden nie zna, to blad
@@ -33,29 +32,27 @@ object FeN4Check {
     def verified : Int = frames - unknown
     def ok : Boolean = errors.isEmpty
     def summary : String =
-      s"N2-N4: $frames ramek golden ($unknown nieweryfikowalnych: nieznany pierscien), $crcRecs rekordow CRC zgodnych, " +
+      s"N2-N4: $frames ramek golden ($unknown nieweryfikowalnych: probki zgubione przy resecie), $crcRecs rekordow CRC zgodnych, " +
       s"$dumps zrzutow zgodnych, rozerwanych $torn, bez rekordu: $missingNearReset przy resecie, $missingAtEnd na koncu" +
       (if (errors.isEmpty) "" else s"; BLEDY: ${errors.take(5).mkString("; ")}")
   }
 
-  /** `known` = false: okno zawiera pozycje pierscienia o nieznanej tresci. */
+  /** `known` = false: okno zawiera probke zgubiona przy resecie. */
   case class Gold(trig : Long, known : Boolean, crc : Vector[Long], exp : Vector[Int], power : Vector[Long],
                   powerExp : Int, segEnd : Long)
 
   /** Golden calego biegu. `ys(abs)`: probka N1 albo None (zgubiona przy
-    * resecie); `starts`: abs pierwszych probek odcinkow (flagi rst).
-    * `ringKnown`: pierscien na starcie biegu znany jako zera (pierwszy bieg
-    * po konfiguracji, atrapy); domyslnie nieznany. */
-  def golden(v : FeHilVariant, ys : Long => Option[Long], first : Long, last : Long, starts : Seq[Long],
-             ringKnown : Boolean = false) : Vector[Gold] = {
+    * resecie); `starts`: abs pierwszych probek odcinkow (flagi rst). */
+  def golden(v : FeHilVariant, ys : Long => Option[Long], first : Long, last : Long, starts : Seq[Long]) : Vector[Gold] = {
     val g   = v.rfft.get
     val fg  = g.framer
     val L   = fg.fftSize
     val tab = Bfp.hannTable(L, fg.windowScale)
-    val ring = Array.fill[Option[Long]](L)(if (ringKnown) Some(0L) else None)
+    val ring = new Array[Option[Long]](L)
     val out = scala.collection.mutable.ArrayBuffer[Gold]()
     val segs = (starts.sorted :+ (last + 1)).sliding(2).collect { case Seq(a, b) if b > a => (a, b - 1) }.toSeq
     for ((a, b) <- segs) {
+      for (i <- 0 until L) ring(i) = Some(0L)   // zera po resecie
       var wr = 0
       for (t <- 0L to (b - a)) {
         ring(wr) = ys(a + t)
@@ -87,7 +84,7 @@ object FeN4Check {
     (g.frameBusyCycles / g.cyclesPerSample).toInt + 2 + FeN4.dumpLen(g.bins) + 4 * FeN4.CrcLen
   }
 
-  def analyze(v : FeHilVariant, r : FeCheck.Report, ringKnown : Boolean = false) : Report = {
+  def analyze(v : FeHilVariant, r : FeCheck.Report) : Report = {
     require(v.hasN4, s"${v.name} bez N2 - N4")
     val g    = v.rfft.get
     val bins = g.bins
@@ -128,7 +125,7 @@ object FeN4Check {
     val starts = r.frames.indices.filter(i => r.frames(i).rst).map(r.abs)
     val endAbs = r.abs.lastOption.getOrElse(0L)
     val gold   = if (r.abs.isEmpty) Vector.empty[Gold]
-                 else golden(v, yOf.get, r.abs.head, endAbs, starts, ringKnown)
+                 else golden(v, yOf.get, r.abs.head, endAbs, starts)
     val byTrig = gold.map(x => x.trig -> x).toMap
     val lat    = (g.frameBusyCycles / g.cyclesPerSample).toInt + 2
 
@@ -187,10 +184,10 @@ object FeN4Check {
   }
 
   /** Rekordy dla atrap (FakeFeBus): bajty rekordow po trig, jak wysylalby
-    * je sprzet (pierscien znany: atrapa zaczyna od zer). */
+    * je sprzet. */
   def records(v : FeHilVariant, ys : Long => Option[Long], first : Long, last : Long, starts : Seq[Long],
               dumpEvery : Int) : Vector[(Long, Seq[Int])] =
-    golden(v, ys, first, last, starts, ringKnown = true).zipWithIndex.flatMap { case (x, k) =>
+    golden(v, ys, first, last, starts).zipWithIndex.flatMap { case (x, k) =>
       val crc  = (x.trig, FeN4.bytes(FeN4.CrcRec(x.trig, 7, x.crc, x.exp)))
       val dump = if (dumpEvery > 0 && k > 0 && k % dumpEvery == 0) Some((x.trig, FeN4.bytes(FeN4.DumpRec(x.trig, x.powerExp, x.power)))) else None
       crc +: dump.toSeq

@@ -80,14 +80,14 @@ object FeHilPlan {
       stimulus = Seq("mowa z offsetem DC, -Dsamples probek; dump_every 16"),
       checking = Seq("jak hw_fe_chain (N0, N1)",
                      "FeN4Check: rekord CRC zgodny na N2, N3 i N4 dla kazdej weryfikowalnej ramki (poza koncowka nagrania)",
-                     "najwyzej 3 pierwsze ramki nieweryfikowalne (pierscien Framera sprzed biegu)",
+                     "wszystkie ramki weryfikowalne (Framer: zera w miejsce pozycji niezapisanych od resetu)",
                      "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
                      "n4_aux_drop == n4_order == fr_overrun == 0")),
 
     Testpoint("hw_n4_reset", Stage.V2,
       "Reset DUT-a w trakcie strumienia z N4; bitstream mimas_n4",
       stimulus = Seq("HilResetInjector: 8 resetow po 500 cykli dut co 50-78 ms (odcinki dluzsze niz pierscien)"),
-      checking = Seq("FeN4Check: golden z pierscieniem Framera przechodzacym przez reset, rekordy zgodne",
+      checking = Seq("FeN4Check: golden z pierscieniem zer po kazdym resecie, rekordy zgodne",
                      "braki rekordow tylko przy resetach (rozerwane, tuz przed resetem)")),
 
     Testpoint("hw_fe_long", Stage.V3,
@@ -371,8 +371,8 @@ class FeHilTestplan extends HilSuite {
     val stim = FeStimulus.noisy(fs, samples, new Random(21))
     val r = run(b, "mowa N0-N4", stim)
     val n = r.n4.get
-    assert(n.unknown <= 3, s"nieweryfikowalnych ${n.unknown}, oczekiwane <= 3")
-    assert(n.crcRecs + n.missingAtEnd == n.verified && n.crcRecs > 0 && n.torn == 0, n.summary)
+    assert(n.unknown == 0, s"nieweryfikowalnych ${n.unknown}, oczekiwane 0")
+    assert(n.crcRecs + n.missingAtEnd == n.frames && n.crcRecs > 0 && n.torn == 0, n.summary)
     if (samples >= 20000) assert(n.dumps >= 1, s"zaden zrzut N4: ${n.summary}")
   }
 
@@ -384,7 +384,8 @@ class FeHilTestplan extends HilSuite {
     val r = run(b, "8 resetow N0-N4", stim, rst = Some(plan))
     val n = r.n4.get
     assert(r.fpga("rst_done") == 8 && r.report.resets == 8, s"rst_done ${r.fpga("rst_done")}, flagi ${r.report.resets}")
-    assert(n.crcRecs >= n.verified / 2, s"za malo zweryfikowanych ramek: ${n.summary}")
+    // braki tylko przy resetach (tuz przed, rozerwane) i na koncu nagrania
+    assert(n.crcRecs >= n.verified - n.missingNearReset - n.missingAtEnd - n.torn, s"za malo zweryfikowanych ramek: ${n.summary}")
   }
 
   hwScenario("hw_fe_long") { b =>

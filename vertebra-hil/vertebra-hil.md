@@ -782,14 +782,14 @@ Rekordy jadą kanałem pomocniczym ramki powrotnej: 8 b na próbkę, czyli 160 B
 | --- | --- |
 | FPGA | `FeN4Tap`: CRC32 (36 b na cykl) na N2/N3/N4, kolejki ramek N2/N3, kolejka bajtów CRC (256 B), bufor zrzutu (257 × 36 b), arbiter rekordów. `FeHilVariant.rfft`, wariant `mimas_n4`, rejestr `dump_every` (`0x103`), liczniki `n4_*` i `fr_overrun` (`0x018`–`0x01D`) |
 | Wspólne Scala | `FeN4`: CRC, układ i parsowanie rekordów (harness i host) |
-| Ocena | `FeN4Check`: sklejanie rekordów, golden z modelem pierścienia Framera, porównanie CRC i zrzutów, kompletność |
+| Ocena | `FeN4Check`: sklejanie rekordów, golden z pierścieniem Framera zerowanym resetem, porównanie CRC i zrzutów, kompletność |
 | Host | `hw_n4_chain` (V1), `hw_n4_reset` (V2). Na bitstreamie `mimas_n4` każdy bieg `hw_fe_*` sprawdza też N2–N4. Na `mimas` testy N4 są *canceled* |
 | Atrapy | `FakeFeBus` z rekordami N4 i wstrzykiwanym błędem CRC N3 |
 | ESP32 | bez zmian (nagrywa ramki 32/32 jak w §12) |
 
 ### Co pokazała symulacja harnessu
 
-- **Pierścień Framera nie jest zerowany resetem.** `Framer.scala` mówi „przed pierwszymi fftSize próbkami bufor zawiera zera”, ale to prawda tylko po konfiguracji układu. Po resecie DUT-a (start biegu, soft reset, `HilResetInjector`, a w urządzeniu każdy restart toru) pierwsze 3 ramki zawierają próbki sprzed resetu. W symulacji była to jedna pozycja ze śmieciami sprzed resetu domeny. Na płytce będą to próbki poprzedniego biegu. Golden w `FeN4Check` modeluje to jak sprzęt: pierścień przechodzi przez reset, a pozycje nieznane hostowi robią ramkę nieweryfikowalną. **Do decyzji w `front_end`:** zostawić i poprawić komentarz, albo maskować w Framerze odczyt pozycji niezapisanych od resetu (licznik zapełnienia, kilka LUT-ów). Wtedy golden przejdzie na „zera po resecie”, a 3 pierwsze ramki staną się weryfikowalne.
+- **Pierścień Framera nie był zerowany resetem (poprawione w 362b8db).** `Framer.scala` mówił „przed pierwszymi fftSize próbkami bufor zawiera zera”, ale to była prawda tylko po konfiguracji układu. Po resecie DUT-a (start biegu, soft reset, `HilResetInjector`, a w urządzeniu każdy restart toru) pierwsze 3 ramki zawierały próbki sprzed resetu. Poprawka: licznik `fill` próbek zapisanych od resetu, pozycje starsze przy odczycie podmieniane na 0. Golden w `FeN4Check` startuje każdy odcinek od pierścienia zer, więc wszystkie ramki są weryfikowalne (poza tymi z próbką zgubioną przy resecie). Bitstream sprzed poprawki: `hw_n4_reset` pada na N2 w pierwszych ramkach odcinków, zgodnie z oczekiwaniem.
 - **Rozjazd par N2/N3 z N4 o jedną ramkę.** `PowerSpectrum` kończy ramkę cykl po `Rfft`, a wpis N3 jest widoczny na wyjściu `StreamFifo` dopiero po 1–2 cyklach. `FeN4Tap` obsługuje teraz koniec ramki N4 3 cykle później, na zatrzaśniętych wartościach.
 - **Znacznik ramki musi być na jej końcu.** Pierwsza wersja v2 miała znacznik w lewym slocie, który idzie pierwszy. Ramka ucięta resetem w prawym slocie przechodziła wtedy dekodowanie z wyzerowanym końcem `x`.
 
@@ -797,8 +797,8 @@ Rekordy jadą kanałem pomocniczym ramki powrotnej: 8 b na próbkę, czyli 160 B
 
 - `FeHarnessTestplan` (symulacja, wariant `d8_n4`: dzielnik 8, ale Framer 512/160 jak na płytce):
   - `fe_harness_n4_bounds` (bez symulacji): CRC-32/MPEG-2 na wektorze „123456789” = `0x0376E6E7`, rekordy w obie strony, przepustowość kanału;
-  - `fe_harness_n4_chain`: 2200 próbek, `dump_every` 4, każda weryfikowalna ramka zgodna na 3 węzłach, zrzut N4 zgodny;
-  - `fe_harness_n4_reset`: 2 resety, golden z pierścieniem przez reset;
+  - `fe_harness_n4_chain`: 2200 próbek, `dump_every` 4, każda ramka (także pierwsze) zgodna na 3 węzłach, zrzut N4 zgodny;
+  - `fe_harness_n4_reset`: 2 resety, golden z pierścieniem zer po każdym resecie;
   - stare scenariusze N0 + N1 na układzie v2.
 - `HilHostTestplan.host_fe_on_fakes`: dodatkowo `FeHilTestplan` na atrapie `mimas_n4`, przekłamane CRC N3 → komunikat „N3 CRC …, golden … (N2 zgodny)”, a na wariancie `mimas` testy N4 *canceled*.
 
@@ -859,7 +859,8 @@ Wnioski:
 
 Zostaje:
 
-- decyzja o `Framer` (zerowanie pierścienia po resecie) i o rejestrze BRAM → DSP w `FftCore`.
+- przebudowa `mimas_n4` z poprawką Framera i `hw_n4_chain`/`hw_n4_reset` na płytce (oczekiwane: 0 nieweryfikowalnych);
+- decyzja o rejestrze BRAM → DSP w `FftCore`.
 
 ## Źródła
 
