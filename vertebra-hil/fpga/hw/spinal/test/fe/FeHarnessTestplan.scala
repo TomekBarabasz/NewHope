@@ -371,8 +371,8 @@ class FeHarnessTestplan extends TestplanSuite {
   testpoint("fe_harness_param_bounds") {
     for (v <- FeHilVariant.all :+ d8) {
       assert(v.isLegal, s"${v.name}: ${v.problems.mkString("; ")}")
-      info(f"${v.name}: dut ${v.dutHz / 1e6}%.4f MHz, bclkDiv ${v.fe.i2s.bclkDiv}, fs ${v.fe.i2s.fs}%.2f Hz, " +
-           f"polokres SCK ${v.fe.i2s.sckLow} cykli (nadajnik powrotny > ${FeFrame.txSlave.txLatencyCycles}), " +
+      info(f"${v.name}: dut ${v.dutHz / 1e6}%.4f MHz, sckDiv ${v.fe.i2s.sckDiv}, fs ${v.fe.i2s.fs}%.2f Hz, " +
+           f"SCK nisko ${v.fe.i2s.sckLow} / wysoko ${v.fe.i2s.sckHigh} cykli (nadajnik powrotny > ${FeFrame.txSlave.txLatencyCycles}), " +
            s"variant ${v.code.toHexString}")
     }
     for (v <- FeHilVariant.all) {

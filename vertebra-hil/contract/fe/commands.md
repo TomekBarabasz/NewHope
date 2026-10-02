@@ -132,7 +132,7 @@ Kolejność biegu (host):
 
 ## FPGA: wariant
 
-Rejestr `variant` (`0x006`) = `bclkDiv | guardBits << 8 | sampleWidth << 16 | typ << 24`, gdzie typ to `0xFE` dla N0 + N1 i `0xF4` dla N0 – N4. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
+Rejestr `variant` (`0x006`) = `sckDiv | guardBits << 8 | sampleWidth << 16 | typ << 24`, gdzie typ to `0xFE` dla N0 + N1 i `0xF4` dla N0 – N4. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
 
 | Nazwa | Zegar `dut` | Dzielnik | fs | Plik |
 | --- | --- | --- | --- | --- |

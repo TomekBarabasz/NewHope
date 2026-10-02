@@ -10,25 +10,25 @@ import newhope.vertebra.hil.HilRegMap
 //
 //  Generyki DUT-ow sa ustalane przy elaboracji, wiec kazdy wariant to
 //  osobny bitstream. Zegar `dut` jest staly w wariancie:
-//    dutHz = fs * 2 kanaly * slotWidth * 2 polokresy * halfDiv
-//  Liczba jest nominalna - I2sGenerics wymaga calkowitego halfDiv, a to,
+//    dutHz = fs * 2 kanaly * slotWidth * sckDiv
+//  Liczba jest nominalna - I2sGenerics wymaga calkowitego sckDiv, a to,
 //  co naprawde da DCM, wplywa tylko na fs (ESP32 jako slave idzie za
-//  SCK, jako master nie zalezy od naszego fs). halfDiv dobrany tak, zeby
+//  SCK, jako master nie zalezy od naszego fs). sckDiv dobrany tak, zeby
 //  dut ~ 45-50 MHz: slave ma wtedy ~8 cykli na polokres SCK ESP32
 //  (wymog > txLatencyCycles = 3).
 // =====================================================================
-case class I2sHilVariant(name : String, fs : Int, width : Int, slotWidth : Int, halfDiv : Int) {
-  def dutHz : Long = fs.toLong * 4 * halfDiv * slotWidth
+case class I2sHilVariant(name : String, fs : Int, width : Int, slotWidth : Int, sckDiv : Int) {
+  def dutHz : Long = fs.toLong * 2 * sckDiv * slotWidth
 
   def masterG : I2sGenerics =
     I2sGenerics(HertzNumber(BigDecimal(dutHz)), HertzNumber(BigDecimal(fs)), width, slotWidth)
   def slaveG : I2sSlaveGenerics = I2sSlaveGenerics(width)
 
-  /** Rejestr variant (0x006): width | slotWidth << 8 | halfDiv << 16. */
-  def code : Long = width.toLong | (slotWidth.toLong << 8) | (halfDiv.toLong << 16)
+  /** Rejestr variant (0x006): width | slotWidth << 8 | sckDiv << 16. */
+  def code : Long = width.toLong | (slotWidth.toLong << 8) | (sckDiv.toLong << 16)
 
   def isLegal : Boolean =
-    I2sPattern.validWidth(width) && masterG.isLegal && masterG.halfDiv == halfDiv && slaveG.isLegal
+    I2sPattern.validWidth(width) && masterG.isLegal && masterG.sckDiv == sckDiv && slaveG.isLegal
 
   /** Polokres SCK mastera zewnetrznego (ESP32) w cyklach dut, przy fs i slocie. */
   def slaveMarginCycles(espFs : Int, espSlot : Int) : BigDecimal =
@@ -36,10 +36,10 @@ case class I2sHilVariant(name : String, fs : Int, width : Int, slotWidth : Int, 
 }
 
 object I2sHilVariant {
-  val v16_32 = I2sHilVariant("v16_32", 48000, 16, 32, 8)    // 49,152 MHz
-  val v24_32 = I2sHilVariant("v24_32", 44100, 24, 32, 8)    // 45,1584 MHz
-  val v16_16 = I2sHilVariant("v16_16", 48000, 16, 16, 16)   // 49,152 MHz
-  val v32_32 = I2sHilVariant("v32_32", 48000, 32, 32, 8)    // 49,152 MHz
+  val v16_32 = I2sHilVariant("v16_32", 48000, 16, 32, 16)    // 49,152 MHz
+  val v24_32 = I2sHilVariant("v24_32", 44100, 24, 32, 16)    // 45,1584 MHz
+  val v16_16 = I2sHilVariant("v16_16", 48000, 16, 16, 32)   // 49,152 MHz
+  val v32_32 = I2sHilVariant("v32_32", 48000, 32, 32, 16)    // 49,152 MHz
   val all = Seq(v16_32, v24_32, v16_16, v32_32)
 }
 

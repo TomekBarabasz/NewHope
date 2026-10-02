@@ -83,7 +83,7 @@ object I2sHarnessPlan {
   val plan : Seq[Testpoint] = Seq(
     Testpoint("harness_param_bounds", Stage.V1,
       "Warianty legalne i z zapasem",
-      checking = Seq("kazdy wariant: generyki DUT-ow legalne, halfDiv calkowity",
+      checking = Seq("kazdy wariant: generyki DUT-ow legalne, sckDiv calkowity",
                      "slave: polokres SCK ESP32 (fs wariantu, slot 32) > txLatencyCycles",
                      "najkrotsza ramka >= 5 cykli checkera")),
     Testpoint("harness_regs", Stage.V1,
@@ -396,7 +396,7 @@ class I2sHarnessTestplan extends TestplanSuite {
     for (v <- I2sHilVariant.all) {
       assert(v.isLegal, s"$v")
       val margin = v.slaveMarginCycles(v.fs, 32)
-      info(f"${v.name}: dut ${v.dutHz / 1e6}%.4f MHz, halfDiv ${v.halfDiv}, " +
+      info(f"${v.name}: dut ${v.dutHz / 1e6}%.4f MHz, sckDiv ${v.sckDiv}, " +
            f"polokres SCK ESP32 = $margin%.2f cykli dut, ramka ${v.masterG.cyclesPerFrame} cykli")
       assert(v.slaveG.supportsSckHalf(margin), s"${v.name}: slave nie nadazy za SCK ESP32")
       assert(v.masterG.cyclesPerFrame >= 5)

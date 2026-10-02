@@ -23,19 +23,20 @@ case class FeHilVariant(name : String, fe : FrontEndGenerics, rfft : Option[Rfft
   def sampleWidth : Int = fe.dc.sampleWidth
   def hasN4 : Boolean = rfft.isDefined
 
-  /** Rejestr variant (0x006): bclkDiv | guardBits << 8 | sampleWidth << 16 |
+  /** Rejestr variant (0x006): sckDiv | guardBits << 8 | sampleWidth << 16 |
     * 0xFE << 24 (N0 + N1) albo 0xF4 << 24 (N0 - N4). */
   def code : Long =
-    fe.i2s.bclkDiv.toLong | (fe.dc.guardBits.toLong << 8) | (fe.dc.sampleWidth.toLong << 16) |
+    fe.i2s.sckDiv.toLong | (fe.dc.guardBits.toLong << 8) | (fe.dc.sampleWidth.toLong << 16) |
     ((if (hasN4) 0xF4L else 0xFEL) << 24)
 
   def problems : Seq[String] = fe.problems ++ rfft.toSeq.flatMap(_.problems) ++ Seq(
     (fe.i2s.slotBits == FeFrame.SlotBits) -> s"slot I2S ${fe.i2s.slotBits}, ramka powrotna ma ${FeFrame.SlotBits}",
     (fe.dc.sampleWidth <= FeFrame.MaxSampleWidth) -> s"probka ${fe.dc.sampleWidth} b > ${FeFrame.MaxSampleWidth} (pola tagu)",
     // Nadajnik powrotny (I2sSlave) widzi wewnetrzny SCK przez synchronizator:
-    // polokres SCK > txLatencyCycles (I2sSlaveGenerics.supportsSckHalf).
-    (fe.i2s.sckLow > FeFrame.txSlave.txLatencyCycles) ->
-      s"polokres SCK ${fe.i2s.sckLow} cykli <= opoznienie nadajnika powrotnego ${FeFrame.txSlave.txLatencyCycles}",
+    // krotsza polowka SCK (sckHigh przy nieparzystym sckDiv) > txLatencyCycles
+    // (I2sSlaveGenerics.supportsSckHalf).
+    (fe.i2s.sckHigh > FeFrame.txSlave.txLatencyCycles) ->
+      s"polokres SCK ${fe.i2s.sckHigh} cykli <= opoznienie nadajnika powrotnego ${FeFrame.txSlave.txLatencyCycles}",
     fe.i2s.leftChannel -> "harness zaklada mikrofon w lewym kanale (L/R = GND)",
     rfft.forall(_.framer.sampleWidth == fe.dc.sampleWidth) -> "szerokosc probki N1 != wejscie Framera",
     rfft.forall(_.cyclesPerSample == fe.i2s.cyclesPerSample) ->
@@ -55,7 +56,7 @@ object FeHilVariant {
   /** To samo + Framer 512/160, FftCore 256, RealUnpack, PowerSpectrum (N2 - N4). */
   val mimasN4 = withN4("mimas_n4", FrontEndGenerics.mimas)
   /** Dolna granica dzielnika (8): tylko symulacja harnessu, 9x krotsza. */
-  val d8 = FeHilVariant("d8", FrontEndGenerics(I2sMicGenerics(clockHz = 8L * 64 * 16000, bclkDiv = 8)))
+  val d8 = FeHilVariant("d8", FrontEndGenerics(I2sMicGenerics(clockHz = 8L * 64 * 16000, sckDiv = 8)))
   /** d8 z pelnym torem widma 512/160 (numeryka jak na plytce). */
   val d8N4 = withN4("d8_n4", d8.fe)
 
