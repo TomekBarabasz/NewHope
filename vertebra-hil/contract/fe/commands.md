@@ -1,4 +1,4 @@
-# Kontrakt FE: frontend N0 + N1 (I2S RX z INMP441 i filtr DC)
+# Kontrakt FE: frontend N0 – N4 (I2S RX z INMP441, filtr DC, Framer, FFT, moc)
 
 Uzupełnienie `../commands.md` o to, co zna frontend: DUT to `MicFrontEnd` z `front_end` (N0 `I2sMicRx` + N1 `DcFilter`). FPGA jest masterem I2S tak jak w urządzeniu. ESP32-S3 jest slave'em i udaje mikrofon INMP441: nadaje bodziec wgrany wcześniej przez PC, a w tym samym czasie nagrywa do PSRAM ramki wyniku, które FPGA odsyła na SD_F2E. Ocena jest na PC: bit w bit z `DcGolden` (`vertebra-hil.md` §12).
 
@@ -26,19 +26,25 @@ Obie strony mają slot 32 i słowo 32 bity, format Philips. ESP32 pracuje w full
 
 N0 bierze górne `sampleWidth` bitów lewego słowa: `x = L[31:14]` (ze znakiem), czyli `mic24[23:6]`. Po wyczerpaniu bodźca ESP32 nadaje zera (`auto_clear`).
 
-**FPGA → ESP32 (wynik), jedna ramka na próbkę N1:**
+**FPGA → ESP32 (wynik, jedna ramka na próbkę N1), układ v2:**
 
 | Kanał | Bity | Pole |
 | --- | --- | --- |
 | L | 31:14 | `y`: wyjście `DcFilter` (Q0.17) |
-| L | 13:0 | `idx`: numer próbki od startu, mod 2^14 |
+| L | 13:6 | `idx`: numer próbki od startu, mod 2^8 |
+| L | 5 | `rst`: pierwsza próbka po resecie DUT-a, także po starcie |
+| L | 4 | `bypass`: ta próbka ominęła filtr (`y == x`) |
+| L | 3 | `overrun`: lepki `overrun` filtra albo Framera |
+| L | 2 | `aux_valid`: ramka niesie bajt kanału pomocniczego |
+| L | 1 | `aux_sof`: ten bajt otwiera rekord |
+| L | 0 | 0 |
 | R | 31:14 | `x`: próbka N0, z której policzono `y` (echo) |
-| R | 13 | `rst`: pierwsza próbka po resecie DUT-a, także po starcie |
-| R | 12 | `bypass`: ta próbka ominęła filtr (`y == x`) |
-| R | 11 | `overrun`: lepki `overrun` filtra |
-| R | 10:0 | znacznik `0x5A5` |
+| R | 13:6 | `aux`: bajt kanału pomocniczego (rekordy N2–N4, niżej) |
+| R | 5:0 | znacznik `0x2D` |
 
-Ramka bez znacznika to cisza: przed startem, w trakcie `tail` po stop albo przy niedoborze nadajnika powrotnego. Host ją pomija. Echo `x` idzie obok potoku filtra, więc host liczy golden z tego, co filtr naprawdę dostał. Błąd transportu (I2S w którąkolwiek stronę) nigdy nie udaje błędu filtra.
+Ramka bez znacznika to cisza: przed startem, w trakcie `tail` po stop, przy niedoborze nadajnika powrotnego albo ramka ucięta resetem DUT-a. Znacznik leży na samym końcu ramki, bo reset zatrzymuje SCK w połowie ramki, a ucięta reszta to zera. Host taką ramkę pomija. Echo `x` idzie obok potoku filtra, więc host liczy golden z tego, co filtr naprawdę dostał. Błąd transportu (I2S w którąkolwiek stronę) nigdy nie udaje błędu filtra.
+
+Układ v1 (do `039cd8f`: `idx` 14 b, znacznik `0x5A5` w R, bez kanału pomocniczego) nie jest już używany; bitstream i host muszą być z tej samej wersji (`HilBench` sprawdza `build`).
 
 ## Ocena (host, `FeCheck`)
 
@@ -50,6 +56,41 @@ Ramka bez znacznika to cisza: przed startem, w trakcie `tail` po stop albo przy 
 6. Liczniki FPGA: `frames` = ramki nagrania (+ zgubione przy resetach), a `x_sum`, `y_sum` = sumy z nagrania.
 
 Do raportu idzie też `max |y − float|` (`DcGolden.runFloat`), czyli `dc_golden_vs_float` policzony na wyniku z krzemu.
+
+## N2 – N4: rekordy w kanale pomocniczym (wariant `mimas_n4`)
+
+DUT w wariancie z N4 to `MicFrontEnd` → `Rfft` (Framer 512/160, `FftCore`, `RealUnpack`) → `PowerSpectrum`, wszystko w domenie resetu DUT-a. Ramka widma (co `hop` = 160 próbek) ma ok. 9,2 kbit na każdym węźle, a cały powrót to 64 b na próbkę. Pełne ramki się nie mieszczą, ale ramka widma to deterministyczna funkcja strumienia `y`. Host liczy golden sam, a FPGA przesyła dowód zgodności: CRC32 każdej ramki na trzech węzłach i co `dump_every` ramek pełne widmo mocy. Kod: `FeN4` (`FeHilRegs.scala`), `FeN4Tap`, ocena `FeN4Check`.
+
+**CRC32:** wielomian `0x04C11DB7`, start `0xFFFFFFFF`, bez odbicia i bez XOR na końcu (CRC-32/MPEG-2 po bitach). Każdy element to słowo 36 b podawane od MSB:
+
+| Węzeł | Elementy na ramkę | Słowo |
+| --- | --- | --- |
+| N2 (wyjście Framera) | 256 par | `re[17:0] ## im[17:0]` |
+| N3 (`Rfft`) | 257 prążków | `re[17:0] ## im[17:0]` |
+| N4 (`PowerSpectrum`) | 257 prążków | `p[35:0]` |
+
+Wykładnik bloku idzie osobno w rekordzie.
+
+**Rekord CRC (typ `0x01`, 23 B)**, dla każdej ramki widma: typ, `trig` (3 B LE), flagi, potem dla N2, N3, N4 po kolei CRC32 (4 B LE) i wykładnik (2 B LE, ze znakiem).
+- `trig` to numer próbki N1 od startu (licznik `frames`, mod 2^24), po której Framer wydał ramkę, czyli ostatnia próbka okna.
+- Flagi: bit k oznacza, że węzeł k (N2, N3, N4) miał dokładnie oczekiwaną liczbę elementów z `last` na ostatnim.
+
+**Rekord zrzutu (typ `0x02`, 6 + 5 · 257 = 1291 B):** typ, `trig` (3 B), wykładnik N4 (2 B), potem 257 × `p` (36 b w 5 B LE). Zrzucane są ramki nr `dump_every`, 2 · `dump_every`, … (licząc od 0 od startu), jeśli bufor jest wolny.
+
+Rekordy wychodzą bajt na ramkę wyniku. Rekord CRC wchodzi do kolejki (256 B) w całości albo wcale (`n4_aux_drop`). Arbiter przełącza między CRC a zrzutem tylko na granicy rekordu.
+
+**Ocena (host, `FeN4Check`):**
+
+1. Sklejanie rekordów z bajtów `aux`. Przerwa w numeracji ramek (zgubione przy resecie) albo `sof` w środku rekordu oznacza rekord rozerwany.
+2. Golden jak sprzęt. Pierścień Framera to `Mem` bez resetu, więc jego zawartość przechodzi przez reset DUT-a, a od zera startują tylko wskaźnik zapisu i licznik hop. Ramka f odcinka (od flagi `rst`) ma `trig` = numer próbki `(f + 1) · hop − 1`. Pozycje pierścienia nieznane hostowi (sprzed biegu albo próbki zgubione przy resecie) robią ramkę nieweryfikowalną. Każdy bieg zaczyna się od 3 takich ramek, chyba że to pierwszy bieg po konfiguracji (pierścień z `init` = zera). Potem `FftGolden.rfftFrame` i `power`.
+3. Rekord CRC weryfikowalnej ramki: flagi = 7, a CRC i wykładnik N2, N3, N4 równe goldenowi. Komunikat nazywa pierwszy niezgodny węzeł („N4 CRC …, golden … (N3 zgodny)”), co wskazuje blok: Framer, `FftCore`/`RealUnpack` albo `PowerSpectrum`.
+4. Zrzut: `p` prążek po prążku i wykładnik równe goldenowi.
+5. Każda weryfikowalna ramka ma rekord CRC. Braki są dozwolone tylko w trzech przypadkach:
+   - tuż przed resetem: DUT nie zdążył policzyć ramki;
+   - pod koniec nagrania: rekord jeszcze w kolejce, za zrzutem;
+   - przy rekordach rozerwanych przez reset: braków najwyżej tyle, ile rozerwanych rekordów.
+
+Uwaga do DUT: komentarz w `Framer.scala` („przed pierwszymi fftSize próbkami bufor zawiera zera”) jest prawdziwy tylko po konfiguracji. Po resecie toru pierwsze 3 ramki niosą próbki sprzed resetu. HIL to pokazał, a golden modeluje sprzęt, więc to nie jest błąd testu.
 
 ## ESP32: klucze `cfg`
 
@@ -91,11 +132,12 @@ Kolejność biegu (host):
 
 ## FPGA: wariant
 
-Rejestr `variant` (`0x006`) = `bclkDiv | guardBits << 8 | sampleWidth << 16 | 0xFE << 24`. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
+Rejestr `variant` (`0x006`) = `bclkDiv | guardBits << 8 | sampleWidth << 16 | typ << 24`, gdzie typ to `0xFE` dla N0 + N1 i `0xF4` dla N0 – N4. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
 
 | Nazwa | Zegar `dut` | Dzielnik | fs | Plik |
 | --- | --- | --- | --- | --- |
 | `mimas` | 75 MHz (DCM 3/4, dokładnie) | 73 | 16 053,08 Hz | `FeHarnessTop_mimas`, `hw/fe_harness.ucf` |
+| `mimas_n4` | jw. | 73 | 16 053,08 Hz | `FeHarnessTop_mimas_n4`, `hw/fe_harness.ucf`; DUT N0 – N4 |
 
 Wariant `d8` (dzielnik 8) istnieje tylko w symulacji harnessu.
 
@@ -106,10 +148,11 @@ Wariant `d8` (dzielnik 8) istnieje tylko w symulacji harnessu.
 | `0x100` | `bypass_from` | RW | bypass dla próbek N0 o numerze w `[bypass_from, bypass_to)` |
 | `0x101` | `bypass_to` | RW | `0, 0` = bez bypassu (domyślnie), `0, 0xFFFFFFFF` = cały bieg |
 | `0x102` | `tail` | RW | 16 bitów; próbki ciszy po `stop`, zanim SCK stanie (domyślnie 512, ok. 32 ms) |
+| `0x103` | `dump_every` | RW | 16 bitów; N4: zrzut co tyle ramek widma, 0 = bez zrzutu (domyślnie 16). W wariancie bez N4 bez znaczenia |
 
 Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne rejestry generatora (`0x020`–`0x023`) FE ignoruje: bodziec daje ESP32. Wstrzykiwanie resetu (`0x040`–`0x044`) działa jak w I2S i resetuje `MicFrontEnd`.
 
-**Liczniki `0x010`–`0x017`:** migawka przy `stop` w układzie FE, inna niż układ checkera I2S.
+**Liczniki `0x010`–`0x01D`:** migawka przy `stop` w układzie FE, inna niż układ checkera I2S.
 
 | Adres | Nazwa | Opis |
 | --- | --- | --- |
@@ -121,7 +164,13 @@ Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne reje
 | `0x015` | `x_sum` | suma u32 `x` (ze znakiem rozszerzonym do 32 b) wysłanych ramek |
 | `0x016` | `y_sum` | to samo dla `y` |
 | `0x017` | `rst_done` | resety DUT-a z `HilResetInjector` |
+| `0x018` | `n4_frames` | ramki widma mocy zakończone (wariant N4; inaczej 0) |
+| `0x019` | `n4_crc` | rekordy CRC wstawione do kanału pomocniczego |
+| `0x01A` | `n4_dump` | rekordy zrzutu |
+| `0x01B` | `n4_aux_drop` | rekordy CRC odrzucone przy pełnej kolejce; ma być 0 |
+| `0x01C` | `n4_order` | koniec ramki N4 bez ramki N2/N3 w kolejce; ma być 0 |
+| `0x01D` | `fr_overrun` | lepki `overrun` Framera; ma być 0 |
 
-**`status` (`0x005`):** bit 1 (`locked`) oznacza, że DUT taktuje (SCK biegnie); po `stop` gaśnie na granicy ramki po `tail` próbkach. Bit 2 (`error`) oznacza `overflow` albo `dc_overrun`.
+**`status` (`0x005`):** bit 1 (`locked`) oznacza, że DUT taktuje (SCK biegnie); po `stop` gaśnie na granicy ramki po `tail` próbkach. Bit 2 (`error`) oznacza `overflow`, `overrun` filtra lub Framera, `n4_aux_drop` albo `n4_order`.
 
 **Piny:** jak I2S (`../i2s/commands.md`, P7). SCK i WS są wyjściami od pierwszego `start` do soft resetu; wcześniej są w wysokiej impedancji, więc FPGA nie walczy z ESP32 z firmware'em I2S w roli master. TRIG jest wysoko, gdy `HilResetInjector` trzyma DUT w resecie.

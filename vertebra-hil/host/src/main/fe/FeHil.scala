@@ -14,7 +14,8 @@ object FeFpgaMap extends HilFpgaMap {
   val keys : Map[String, HilCfgKey] = Map(
     "bypass_from" -> HilCfgKey.bits(FeHilRegs.BypassFrom, 32),
     "bypass_to"   -> HilCfgKey.bits(FeHilRegs.BypassTo, 32),
-    "tail"        -> HilCfgKey.bits(FeHilRegs.Tail, 16))
+    "tail"        -> HilCfgKey.bits(FeHilRegs.Tail, 16),
+    "dump_every"  -> HilCfgKey.bits(FeHilRegs.DumpEvery, 16))
 
   def variant(code : Long) : Option[FeHilVariant] = FeHilVariant.all.find(_.code == code)
   def variantName(code : Long) : Option[String] = variant(code).map(_.name)
@@ -48,7 +49,7 @@ object FeHil extends HilIp {
 
   val espFlashHint = "Przeflashuj firmware FE: cd vertebra-hil/esp32 && idf.py -B build-fe " +
     "-D SDKCONFIG=build-fe/sdkconfig -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.fe\" build flash"
-  val fpgaFlashHint = "Wgraj bitstream: FeHarnessTop_mimas (hilFpga/runMain ...FeHarnessTopVerilog) -> ISE " +
+  val fpgaFlashHint = "Wgraj bitstream: FeHarnessTop_mimas albo FeHarnessTop_mimas_n4 (hilFpga/runMain ...FeHarnessTopVerilog) -> ISE " +
     "z hw/fe_harness.ucf -> .bin, tools/programmer.py"
 }
 
