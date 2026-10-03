@@ -52,6 +52,7 @@ object FeHarnessPlan {
       "Bodziec od ESP32 przez N0 + N1 i z powrotem",
       stimulus = Seq("mowa z offsetem DC, 300 probek"),
       checking = Seq("FeCheck: start od idx 0, ciaglosc, y == DcGolden(x), x == bodziec >> 14, zera po bodzcu",
+                     "SCK dla ESP32 bez slotu wstepnego: po postoju jedno zbocze przy WS = 1, potem pelne sloty",
                      "liczniki: frames == ramki z nagrania, x_sum / y_sum zgodne, overflow == dc_overrun == 0")),
     Testpoint("fe_harness_corners", Stage.V1,
       "Rogi zakresu przez caly tor",
@@ -134,6 +135,37 @@ class FeHarnessTestplan extends TestplanSuite {
     val rec = new I2sPinRx(d.io.i2s.sckOut, d.io.i2s.wsOut, d.io.i2s.sdOut, FeFrame.SlotBits, dutCd)
     esp.start(); rec.start()
 
+    // Przebieg SCK/WS widziany przez ESP32: po kazdym postoju SCK (start,
+    // reset DUT-a) przed pierwsza ramka dokladnie jedno narastajace zbocze
+    // przy WS = 1, potem pelne sloty (FeHarness.espGate; ESP32 nie znosi
+    // pustego slotu wstepnego I2sMastera).
+    val pinErrors = mutable.ArrayBuffer[String]()
+    private val slot = v.fe.i2s.slotBits
+    private var lastSck = false
+    private var lastWs : Option[Boolean] = None
+    private var rises = 0
+    private var idle = 0
+    private var afterIdle = true
+    private var ramki = 0
+    dutCd.onSamplings {
+      val sck = d.io.i2s.sckOut.toBoolean
+      val ws  = d.io.i2s.wsOut.toBoolean
+      if (sck && !lastSck) { rises += 1; idle = 0 } else idle += 1
+      if (idle == 4 * v.fe.i2s.sckDiv) { afterIdle = true; rises = 0 }
+      lastWs.foreach { lw =>
+        if (lw && !ws) {                                // poczatek ramki
+          val exp = if (afterIdle) 1 else slot
+          if (rises != exp && pinErrors.size < 5)
+            pinErrors += s"ramka $ramki: $rises narastajacych SCK przy WS = 1, oczekiwane $exp" +
+                         (if (afterIdle) " (pierwsza po postoju SCK)" else "")
+          afterIdle = false
+          ramki += 1
+        }
+        if (lw != ws) rises = 0
+      }
+      lastSck = sck; lastWs = Some(ws)
+    }
+
     def load(stim : Seq[Long]) : Unit = esp.send(stim.map(l => Frame(l, FeFrame.stimRight(l))) : _*)
     def recorded : Seq[(Long, Long)] = rec.frames.toSeq.map(f => (f.l, f.r))
     def frameNs : Long = v.fe.i2s.cyclesPerSample * dutPeriod
@@ -159,6 +191,7 @@ class FeHarnessTestplan extends TestplanSuite {
       info(s"${v.name}: ${r.summary}")
       r.info.foreach(s => info(s"  $s"))
       assert(r.ok, r.errors.mkString("\n"))
+      assert(pinErrors.isEmpty, s"SCK/WS dla ESP32: ${pinErrors.mkString("; ")}")
       assert(c("frames") == r.frames.size, s"FPGA frames ${c("frames")}, nagranie ${r.frames.size}")
       assert((c("x_sum"), c("y_sum")) == FeCheck.sums(r.frames), s"sumy FPGA ${c("x_sum")}/${c("y_sum")}")
       assert(c("overflow") == 0 && c("dc_overrun") == 0, s"$c")

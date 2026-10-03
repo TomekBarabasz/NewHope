@@ -4,7 +4,7 @@ Uzupełnienie `../commands.md` o to, co zna frontend: DUT to `MicFrontEnd` z `fr
 
 ```
 PC --load--> ESP32 PSRAM --SD_E2F--> I2sMicRx -> DcFilter -> (y, x) --SD_F2E--> ESP32 PSRAM --rec--> PC
-                 ^ SCK/WS z I2sMicRx (FPGA master, 75 MHz / 73 / 64 = 16 053 Hz) ^
+                 ^ SCK/WS z I2sMicRx = I2sMaster (FPGA master, 75 MHz / 73 / 64 = 16 053 Hz) ^
 ```
 
 Kod: `FeFrame`, `FeHilRegs` i `FeHilVariant` w `fpga/hw/spinal/main/fe/FeHilRegs.scala`. Tę samą definicję czytają harness i host, a ocenę robi `FeCheck` (`fpga/hw/spinal/test/fe/`). Przy rozbieżności z tym plikiem wygrywa kod.
@@ -174,3 +174,5 @@ Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne reje
 **`status` (`0x005`):** bit 1 (`locked`) oznacza, że DUT taktuje (SCK biegnie); po `stop` gaśnie na granicy ramki po `tail` próbkach. Bit 2 (`error`) oznacza `overflow`, `overrun` filtra lub Framera, `n4_aux_drop` albo `n4_order`.
 
 **Piny:** jak I2S (`../i2s/commands.md`, P7). SCK i WS są wyjściami od pierwszego `start` do soft resetu; wcześniej są w wysokiej impedancji, więc FPGA nie walczy z ESP32 z firmware'em I2S w roli master. TRIG jest wysoko, gdy `HilResetInjector` trzyma DUT w resecie.
+
+**SCK dla ESP32 bez slotu wstępnego.** I2sMaster po każdym resecie robi pusty prawy slot (WS = 1 przez 32 okresy SCK), a dopiero potem pierwszą ramkę. ESP32 slave przy takim starcie wysyła w pierwszym lewym slocie słowo prawe (`~L`): na płytce pierwsza próbka N0 każdego biegu była zanegowana, reszta zgodna. Dlatego pin SCK dostaje zegar dopiero od ostatniego bitu slotu wstępnego (`FeHarness.espGate`): ESP32 widzi jedno narastające zbocze przy WS = 1, potem ramkę, jak przy dawnym I2sMicRx. DUT i nadajnik powrotny chodzą na pełnym SCK. Symulacja sprawdza ten przebieg na pinach w każdym scenariuszu.
