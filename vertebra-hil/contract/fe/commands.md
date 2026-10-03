@@ -158,7 +158,7 @@ Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne reje
 | --- | --- | --- |
 | `0x010` | `sent` | ramki oddane nadajnikowi powrotnemu |
 | `0x011` | `frames` | próbki N1 w biegu (ramki wyniku) |
-| `0x012` | `underrun` | ramki ciszy nadajnika powrotnego w biegu (kilka na rozbiegu) |
+| `0x012` | `underrun` | ramki ciszy nadajnika powrotnego w biegu (kilka na rozbiegu i jedna po każdym resecie DUT-a: I2sMaster oddaje pierwszą próbkę razem z pobraniem ramki przez nadajnik) |
 | `0x013` | `overflow` | próbka N1 przy pełnej kolejce do nadajnika; ma być 0 |
 | `0x014` | `dc_overrun` | lepki `overrun` filtra; ma być 0 |
 | `0x015` | `x_sum` | suma u32 `x` (ze znakiem rozszerzonym do 32 b) wysłanych ramek |

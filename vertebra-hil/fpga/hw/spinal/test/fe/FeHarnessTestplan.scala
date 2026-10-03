@@ -65,7 +65,7 @@ object FeHarnessPlan {
     Testpoint("fe_harness_reset", Stage.V1,
       "Reset DUT-a z HilResetInjector w trakcie strumienia",
       stimulus = Seq("3 resety po 100 cykli dut, odstep 30-60 ramek"),
-      checking = Seq("rst_done == 3; 3 flagi rst poza startem",
+      checking = Seq("rst_done == 3; 3 flagi rst poza startem", "underrun <= 4 + rst_done (ramka ciszy po kazdym resecie)",
                      "FeCheck: na kazdym odcinku y == DcGolden od stanu zerowego",
                      "idx ciagle poza <= 2 ramkami tuz przed flaga rst; frames FPGA == nagranie + zgubione")),
     Testpoint("fe_harness_stop_tail", Stage.V1,
@@ -284,6 +284,9 @@ class FeHarnessTestplan extends TestplanSuite {
     e.host.setup(rst = Some((3, 30L * 512, 16383L, 100)))
     val c = e.run(250)
     assert(c("rst_done") == 3, s"rst_done ${c("rst_done")}")
+    // po resecie DUT-a pierwsza probka przychodzi z pobraniem ramki przez
+    // nadajnik powrotny (slot wstepny I2sMastera): jedna ramka ciszy na reset
+    assert(c("underrun") <= 4 + c("rst_done"), s"underrun ${c("underrun")}, resetow ${c("rst_done")}")
     val r = FeCheck.analyze(d8, stim, e.recorded)
     info(s"d8: ${r.summary}")
     assert(r.ok, r.errors.mkString("\n"))
@@ -362,6 +365,7 @@ class FeHarnessTestplan extends TestplanSuite {
     val c = e.run(2600)
     e.waitUntil((e.host.status & (1L << StatusBit.Locked)) == 0, "koniec tail")
     assert(c("rst_done") == 2)
+    assert(c("underrun") <= 4 + c("rst_done"), s"underrun ${c("underrun")}, resetow ${c("rst_done")}")
     val r = FeCheck.analyze(d8N4, stim, e.recorded)
     info(s"d8_n4: ${r.summary}")
     assert(r.ok && r.resets == 2, r.errors.mkString("\n"))
