@@ -6,7 +6,8 @@ import spinal.lib.sim._
 import scala.collection.mutable
 import scala.util.Random
 import newhope.vertebra._
-import newhope.vertebra.sim.SimBackend
+import newhope.vertebra.sim.SimEnv
+import newhope.core.Conventions
 
 // =====================================================================
 //  ZRODLO PLANU
@@ -98,7 +99,7 @@ import newhope.vertebra.sim.SimBackend
 //     loopback         : SDI = SDO zamiast kodeka
 //     log              : Seq[Option[Frame]] jeden wpis na ramke, None = cisza
 //     resync()         : zostawia w logu tylko ramke W TOKU (patrz Env.resync)
-//     I2sCodecModel.outDelay, I2sCodecModel.minHalfDiv
+//     I2sCodecModel.outDelay, I2sCodecModel.minSckDiv
 // =====================================================================
 
 object I2sMasterDriver {
@@ -241,9 +242,9 @@ class I2sMasterTestplan extends TestplanSuite {
     // --- V1 ---------------------------------------------------------
     Testpoint("i2s_param_bounds", Stage.V1,
       "Wszystkie konfiguracje sa legalne dla DUT-a i dla testbenchu",
-      checking = Seq("fclk / (2 * fs * 2 * slotWidth) calkowite i >= 1",
+      checking = Seq("sckDiv = fclk / (fs * 2 * slotWidth) calkowite i >= 2 (parzyste lub nie)",
                      "width <= slotWidth, width <= 32 (dane testowe w Long)",
-                     "halfDiv >= I2sCodecModel.minHalfDiv - okno waznosci bitu " +
+                     "sckDiv >= I2sCodecModel.minSckDiv - okno waznosci bitu " +
                      "z modelu obejmuje oba mozliwe zbocza probkowania DUT-a")),
 
     Testpoint("i2s_tx_frame", Stage.V1,
@@ -275,7 +276,7 @@ class I2sMasterTestplan extends TestplanSuite {
     Testpoint("i2s_sck_ws_timing", Stage.V1,
       "SCK i WS maja okresy wynikajace z generykow, bez tolerancji",
       stimulus = Seq("Kilka ramek ciszy"),
-      checking = Seq("Polokres SCK wysoki i niski == halfDiv",
+      checking = Seq("SCK wysoko sckHigh = floor(sckDiv/2), nisko sckLow = ceil(sckDiv/2)",
                      "slotWidth narastajacych SCK miedzy zboczami WS",
                      "Okres ramki == cyclesPerFrame, czyli fs dokladnie")),
 
@@ -346,13 +347,13 @@ class I2sMasterTestplan extends TestplanSuite {
       "SDO i WS zmieniaja sie w tym samym cyklu co opadajace SCK",
       stimulus = Seq("Wzorce zmieniajace SDO na kazdej granicy bitu"),
       checking = Seq("Kazda zmiana SDO/WS 0 cykli po opadajacym SCK",
-                     "Odbiornik dostaje caly polokres na setup; przy halfDiv = 1 " +
+                     "Odbiornik dostaje cala faze niska na setup; przy sckDiv = 2 " +
                      "kazdy cykl opoznienia to zero zapasu")),
 
     // --- V3 ---------------------------------------------------------
     Testpoint("i2s_random_reset", Stage.V3,
       "Reset w losowym momencie ramki zostawia piny w stanie spoczynku",
-      stimulus = Seq("Reset asynchroniczny w losowym miejscu ramki, 3 razy",
+      stimulus = Seq("Reset (synchroniczny, Conventions) w losowym miejscu ramki, 3 razy",
                      "Po resecie czysta tura TX i RX"),
       checking = Seq("W resecie SCK=0, WS=1, SDO=0, io.rx i underrun nisko",
                      "Tura po resecie zgodna ze scoreboardem")),
@@ -387,49 +388,51 @@ class I2sMasterTestplan extends TestplanSuite {
   //  Wszystkie w Hz calkowitych (kHz/Hz na Int), zadnych literalow
   //  Double - 45.1584 MHz jako Double to juz zaokraglenie.
   //
-  //  Ramka to 2 * slotWidth * 2 * halfDiv cykli, czyli 128..1024 cykli.
+  //  Ramka to 2 * slotWidth * sckDiv cykli, czyli 128..1024 cykli,
+  //  poza `mimas` (4672) - jedynym nieparzystym dzielnikiem z plytki.
   //  Tanio, wiec - inaczej niz w I2C - wszystko leci na wszystkich
   //  konfiguracjach i nie ma zbioru `heavy`.
   // -------------------------------------------------------------------
   case class Cfg(name : String, g : I2sGenerics)
 
   val configs = Seq(
-    // 49.152 MHz / (48k * 64 * 2) = 8
+    // sckDiv = 49.152 MHz / (48k * 64) = 16
     Cfg("fs48k",  I2sGenerics(49152 kHz, 48 kHz, width = 16, slotWidth = 32)),
-    // 45.1584 MHz / (44.1k * 64 * 2) = 8; 24 bity w slocie 32
+    // sckDiv = 45.1584 MHz / (44.1k * 64) = 16; 24 bity w slocie 32
     Cfg("fs44k1", I2sGenerics(45158400 Hz, 44100 Hz, width = 24, slotWidth = 32)),
-    // 24.576 MHz / (48k * 32 * 2) = 8; bez paddingu - LSB za zboczem WS
+    // sckDiv = 24.576 MHz / (48k * 32) = 16; bez paddingu - LSB za zboczem WS
     Cfg("w16s16", I2sGenerics(24576 kHz, 48 kHz, width = 16, slotWidth = 16)),
-    // 6.144 MHz / (48k * 64 * 2) = 1 - DOLNA GRANICA: SCK przelacza sie
+    // sckDiv = 6.144 MHz / (48k * 64) = 2 - DOLNA GRANICA: SCK przelacza sie
     // co cykl, zapas modelu kodeka = 0 (wyprowadzenie w
-    // I2sCodecModel.minHalfDiv). Odpowiednik qmin z I2C.
+    // I2sCodecModel.minSckDiv). Odpowiednik qmin z I2C.
     Cfg("min",    I2sGenerics(6144 kHz, 48 kHz, width = 16, slotWidth = 32)),
     // Skrajne szerokosci i fs z retroSoC/i2s (8..32 bity, 8..96 kHz).
-    // 2.048 MHz / (8k * 16 * 2 * 2) = 4; 8 bitow w slocie 16
+    // sckDiv = 2.048 MHz / (8k * 16 * 2) = 8; 8 bitow w slocie 16
     Cfg("w8fs8k",   I2sGenerics(2048 kHz,  8 kHz, width =  8, slotWidth = 16)),
-    // 24.576 MHz / (96k * 32 * 2 * 2) = 2; pelne 32 bity - Frame(Long)
+    // sckDiv = 24.576 MHz / (96k * 32 * 2) = 4; pelne 32 bity - Frame(Long)
     // na granicy i LSB za zboczem WS, jak w w16s16
-    Cfg("w32fs96k", I2sGenerics(24576 kHz, 96 kHz, width = 32, slotWidth = 32))
+    Cfg("w32fs96k", I2sGenerics(24576 kHz, 96 kHz, width = 32, slotWidth = 32)),
+    // Nieparzyste dzielniki pelnego okresu SCK.
+    // sckDiv = 9.216 MHz / (48k * 64) = 3 - najmniejszy nieparzysty: nisko 2, wysoko 1,
+    // czyli zerowy zapas po stronie fazy wysokiej (I2sCodecModel.minSckDiv)
+    Cfg("odd3",   I2sGenerics(9216 kHz, 48 kHz, width = 16, slotWidth = 32)),
+    // Mimas V2 (D-006): 75 MHz / 73 / 64 = 16 053,08 Hz, INMP441 24 b -> 18 b.
+    // fs nie jest skonczonym ulamkiem dziesietnym, stad fromSckDiv.
+    Cfg("mimas",  I2sGenerics.fromSckDiv(75 MHz, 73, width = 18, slotWidth = 32))
   )
 
   for (Cfg(cfgName, g) <- configs) {
 
-    var txPort : StreamPortHandle = null
+    lazy val dut : SimCompiled[I2sMaster] =
+      SimEnv(Conventions.spinal, s"${label}_$cfgName").compile { I2sMaster(g) }
 
-    lazy val dut : SimCompiled[I2sMaster] = Config.sim
-      .workspaceName(s"${label}_${cfgName}_${SimBackend.default.label}")
-      .compile {
-        val d = I2sMaster(g)
-        d.rework {
-          txPort = StreamPortHandle(
-            valid   = d.io.tx.valid,
-            ready   = d.io.tx.ready,
-            payload = Instrument.stream(d.io.tx, "tx"),
-            isInput = true,
-            name    = "tx")
-        }
-        d
-      }
+    // Port io: widoczny w symulacji bez simPublic, checker czyta pola payloadu.
+    def txPort(d : I2sMaster) = StreamPortHandle(
+      valid   = d.io.tx.valid,
+      ready   = d.io.tx.ready,
+      payload = d.io.tx.payload,
+      isInput = true,
+      name    = "tx")
 
     def scenario(name : String)(body : Env => Unit) : Unit =
       testpoint(name, variant = cfgName) {
@@ -486,14 +489,14 @@ class I2sMasterTestplan extends TestplanSuite {
 
     scenario("i2s_sck_ws_timing") { e =>
       e.waitFrames(4)
-      // halfDiv = fclk / (2 * fs * 2 * slotWidth), calkowite z konstrukcji
+      // sckDiv = fclk / (fs * 2 * slotWidth), calkowite z konstrukcji
       // (i2s_param_bounds). Tolerancja 0: SCK i WS to rejestry na jednym
-      // zegarze, nie ma czego zaokraglac. Nieparzysty dzielnik pelnego
-      // okresu (gdyby kiedys byl) wprowadzi tu +-1 na polokres.
+      // zegarze, nie ma czego zaokraglac. Nieparzysty sckDiv to rowno
+      // jeden cykl roznicy: nisko sckLow, wysoko sckHigh.
       val hi = e.mon.sckHigh.distinct
       val lo = e.mon.sckLow.distinct
-      assert(hi == Seq(g.halfDiv), s"SCK wysoki: $hi cykli, oczekiwano ${g.halfDiv}")
-      assert(lo == Seq(g.halfDiv), s"SCK niski: $lo cykli, oczekiwano ${g.halfDiv}")
+      assert(hi == Seq(g.sckHigh), s"SCK wysoki: $hi cykli, oczekiwano ${g.sckHigh}")
+      assert(lo == Seq(g.sckLow),  s"SCK niski: $lo cykli, oczekiwano ${g.sckLow}")
 
       assert(e.mon.sckPerSlot.size >= 6, s"za malo slotow: ${e.mon.sckPerSlot.size}")
       val ps = e.mon.sckPerSlot.distinct
@@ -515,9 +518,9 @@ class I2sMasterTestplan extends TestplanSuite {
     // =================================================================
 
     scenario("tx_payload_stable") { e =>
-      StreamConformance.payloadStable(e.cd, txPort)
+      StreamConformance.payloadStable(e.cd, txPort(e.d))
       // <= 1 ramka czekania na zwolnienie bufora + zapas x2
-      StreamConformance.noStall(e.cd, txPort, 2 * g.cyclesPerFrame)
+      StreamConformance.noStall(e.cd, txPort(e.d), 2 * g.cyclesPerFrame)
 
       val rng = new Random(11)
       val fs  = Seq.fill(6)(randFrame(g, rng))
@@ -531,7 +534,7 @@ class I2sMasterTestplan extends TestplanSuite {
     }
 
     scenario("tx_reset_quiet") { e =>
-      StreamConformance.quietDuringReset(e.cd, txPort)
+      StreamConformance.quietDuringReset(e.cd, txPort(e.d))
 
       Seq(Frame(mask(g, 0x1234L), mask(g, 0x5678L))).foreach(e.push)
       e.settle()
@@ -638,8 +641,8 @@ class I2sMasterTestplan extends TestplanSuite {
       e.settle()
 
       assert(!e.mon.preSyncSdoHigh, "SDO wysoko przed pierwsza ramka")
-      assert(e.mon.sckHigh.head == g.halfDiv,
-             s"pierwszy polokres SCK ${e.mon.sckHigh.head}, oczekiwano ${g.halfDiv}")
+      assert(e.mon.sckHigh.head == g.sckHigh,
+             s"pierwszy polokres SCK ${e.mon.sckHigh.head}, oczekiwano ${g.sckHigh}")
       assert(e.rxs.nonEmpty && e.rxs.head == e.codec.log.head.getOrElse(Silence),
              s"pierwsze rx ${e.rxs.headOption} to nie pierwsza ramka kodeka")
       e.expectTx()
@@ -718,7 +721,7 @@ class I2sMasterTestplan extends TestplanSuite {
 
     // Beyond Circuits t19: SD zmieniane dopiero 2 cykle zegara po SCK
     // opisane jako odstepstwo od spec. Nasz check() lapie tylko zmiane
-    // przy WYSOKIM SCK, wiec przy duzym halfDiv skew by przeszedl.
+    // przy WYSOKIM SCK, wiec przy duzym sckDiv skew by przeszedl.
     scenario("i2s_sdo_on_sck_fall") { e =>
       Seq(Frame(mask(g, 0x55555555L), mask(g, 0xAAAAAAAAL)),
           Frame(m, 0), Frame(0, m)).foreach(e.push)
@@ -742,7 +745,7 @@ class I2sMasterTestplan extends TestplanSuite {
 
       for (_ <- 0 until 3) {
         fork {
-          e.cd.waitSampling(rng.nextInt(2 * g.cyclesPerFrame) + g.halfDiv)
+          e.cd.waitSampling(rng.nextInt(2 * g.cyclesPerFrame) + g.sckLow)
           e.cd.assertReset()
           e.cd.waitActiveEdge(5)
           assert(!d.io.pins.sck.toBoolean && d.io.pins.ws.toBoolean &&
@@ -755,7 +758,7 @@ class I2sMasterTestplan extends TestplanSuite {
         // Ruch przerywany resetem - tresc nieistotna, wyrzucana w resync.
         e.codec.send(randFrame(g, rng), randFrame(g, rng))
         e.push(randFrame(g, rng)); e.push(randFrame(g, rng))
-        e.waitFrames(3)       // > 2 ramki + halfDiv, reset juz byl
+        e.waitFrames(3)       // > 2 ramki + sckLow, reset juz byl
         e.resync()
 
         val f = randFrame(g, rng)
@@ -785,10 +788,10 @@ class I2sMasterTestplan extends TestplanSuite {
   testpoint("i2s_param_bounds") {
     configs.foreach { case Cfg(n, g) =>
       if (g.dividerExact)
-        info(f"$n%-7s halfDiv=${g.halfDiv}%3d  ramka=${g.cyclesPerFrame}%5d cykli  " +
-             f"padding=${g.paddingBits}%2d  zapas modelu=${g.halfDiv - I2sCodecModel.minHalfDiv}%d")
+        info(f"$n%-8s sckDiv=${g.sckDiv}%3d (${g.sckLow}/${g.sckHigh})  ramka=${g.cyclesPerFrame}%5d cykli  " +
+             f"padding=${g.paddingBits}%2d  zapas modelu=${g.sckDiv - I2sCodecModel.minSckDiv}%d")
       else
-        info(s"$n: halfDiv niecalkowite = ${g.halfDivExact}")
+        info(s"$n: sckDiv niecalkowite = ${g.sckDivExact}")
     }
 
     val bad = configs.filterNot(_.g.isLegal)
@@ -796,10 +799,10 @@ class I2sMasterTestplan extends TestplanSuite {
 
     // Granica TESTBENCHU. Objaw przekroczenia jest mylacy: RX przesuniety
     // o bit przy czystym TX, co wyglada jak blad probkowania w DUT-cie.
-    val blind = configs.filter(c => c.g.dividerExact && c.g.halfDiv < I2sCodecModel.minHalfDiv)
+    val blind = configs.filter(c => c.g.dividerExact && c.g.sckDiv < I2sCodecModel.minSckDiv)
     assert(blind.isEmpty,
            s"model kodeka nie nadaza: ${blind.map(_.name).mkString(", ")} " +
-           s"(minHalfDiv = ${I2sCodecModel.minHalfDiv})")
+           s"(minSckDiv = ${I2sCodecModel.minSckDiv})")
 
     val wide = configs.filter(_.g.width > 32)
     assert(wide.isEmpty, s"width > 32 nie miesci sie w Frame(Long): ${wide.map(_.name)}")

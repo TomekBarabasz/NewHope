@@ -176,7 +176,7 @@ class I2sHilTestplan extends HilSuite {
     val dutReal = I2sHilVariant.all.map { v =>
       val (m, d, hz) = DcmClkGen.best(bg.clkHz, v.dutHz)
       val dev = (hz - v.dutHz) / v.dutHz
-      val fs  = hz / (4.0 * v.halfDiv * v.slotWidth)
+      val fs  = hz / (2.0 * v.sckDiv * v.slotWidth)
       val bclk = fs * 2 * v.slotWidth
       info(f"${v.name}: DCM M/D = $m/$d -> ${hz / 1e6}%.4f MHz (${dev * 100}%+.4f %%), fs ${fs}%.1f Hz, " +
            f"BCLK FPGA mastera ${bclk / 1e6}%.4f MHz")

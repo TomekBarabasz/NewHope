@@ -2,29 +2,26 @@ package newhope.frontend
 
 import spinal.core._
 import spinal.lib._
+import newhope.i2s.I2sMaster
 
 // =====================================================================
 //  N0 · I2S RX (INMP441)                              tor probkowy
 //
 //  Liczy:  x[n] = slowo24[23:6], Q0.17
 //  We/wy:  piny SCK, WS (wyjscia), SD (wejscie) -> Flow[SInt(18)]
-//  Kiedy:  jedna probka na ramke I2S, czyli co bclkDiv * 64 cykli
+//  Kiedy:  jedna probka na ramke I2S, co 2 * slotBits * sckDiv cykli
 //
-//  Licznik divCnt dzieli zegar na takt SCK: zbocze narastajace przy
-//  divCnt = sckLow - 1, opadajace przy divCnt = bclkDiv - 1. Licznik
-//  bitCnt (0..63) rosnie na opadajacym zboczu, a WS to jego najstarszy
-//  bit, wiec WS zmienia sie dokladnie z opadajacym SCK, jak wymaga I2S.
+//  Cienka obudowa newhope.com.i2s.I2sMaster:
+//   - master ma width = sampleWidth, wiec z kazdego slotu bierze
+//     sampleWidth najstarszych pozycji = gorne bity slowa INMP441,
+//   - io.rx strzela raz na ramke, na poczatku NASTEPNEJ ramki (po prawym
+//     slocie); nigdy dla ramki czesciowej, wiec pierwsza probka po
+//     resecie jest pelna,
+//   - z ramki bierzemy kanal mikrofonu (lewy dla L/R = GND),
+//   - TX nieuzywany: tx.valid = 0, SDO i underrun niepodlaczone.
 //
-//  W slocie: narastajace zbocze z bitCnt mod 32 = 0 to bit opoznienia
-//  I2S (smiec), zbocza 1..sampleWidth niosa bity 23..(24 - sampleWidth).
-//  Po ostatnim potrzebnym bicie probka wychodzi o jeden cykl pozniej;
-//  reszta slowa jest ignorowana.
-//
-//  Po resecie bitCnt = 63 (WS = 1), wiec pierwsze opadajace zbocze
-//  otwiera lewy slot prawdziwa zmiana WS i pierwsza probka jest pelna.
-//
-//  Wyjscie to Flow: mikrofonu nie da sie wstrzymac. Wszystkie piny
-//  wyjsciowe prosto z rejestrow.
+//  SDI bez synchronizatora - decyzja I2sMastera (dane synchroniczne do
+//  SCK, ktory sami generujemy; na FPGA rejestr w IOB).
 // =====================================================================
 class I2sMicRx(val g: I2sMicGenerics) extends Component {
   require(g.isLegal, g.problems.mkString("; "))
@@ -37,35 +34,16 @@ class I2sMicRx(val g: I2sMicGenerics) extends Component {
     val output = master(Flow(SInt(sampleWidth bits)))
   }
 
-  // ---- zegar bitowy ----------------------------------------------------
-  val divCnt = Reg(UInt(log2Up(bclkDiv) bits)) init 0
-  val rise   = divCnt === U(sckLow - 1)
-  val fall   = divCnt === U(bclkDiv - 1)
-  when(fall) { divCnt := 0 } otherwise { divCnt := divCnt + 1 }
+  val bus = I2sMaster(g.i2s)
 
-  val bitCnt = Reg(UInt(log2Up(frameBits) bits)) init U(frameBits - 1, log2Up(frameBits) bits)
-  val sck    = RegInit(False)
-  when(rise) { sck := True }
-  when(fall) { sck := False; bitCnt := bitCnt + 1 }
+  bus.io.tx.valid   := False
+  bus.io.tx.payload := bus.io.tx.payload.getZero
 
-  io.sck := sck
-  io.ws  := bitCnt.msb
+  io.sck           := bus.io.pins.sck
+  io.ws            := bus.io.pins.ws
+  bus.io.pins.sdi  := io.sd
 
-  // ---- dane ------------------------------------------------------------
-  // SD jest asynchroniczne wzgledem c3_clk0 (mikrofon zmienia je
-  // z opoznieniem wzgledem naszego SCK): zwykly synchronizator.
-  val sdSync = (0 until syncStages).foldLeft(io.sd) { (s, i) =>
-    RegNext(s).init(False).setName(s"sdSync_$i")
-  }
-
-  val slotIdx = bitCnt(log2Up(slotBits) - 1 downto 0)
-  val inSlot  = if (leftChannel) !bitCnt.msb else bitCnt.msb
-  val take    = rise && inSlot && slotIdx >= U(1) && slotIdx <= U(sampleWidth)
-  val last    = rise && inSlot && slotIdx === U(sampleWidth)
-
-  val shift = Reg(Bits(sampleWidth bits)) init 0
-  when(take) { shift := (shift ## sdSync).resize(sampleWidth) }
-
-  io.output.valid   := RegNext(last) init False
-  io.output.payload := shift.asSInt
+  val word = if (leftChannel) bus.io.rx.payload.left else bus.io.rx.payload.right
+  io.output.valid   := bus.io.rx.valid
+  io.output.payload := word.asSInt
 }

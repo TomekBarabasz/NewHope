@@ -135,9 +135,30 @@ case class FeHarness(v : FeHilVariant, bg : HilBridgeGenerics, build : Long) ext
     val rstTx = RegNext(clearing) init True
     val tx    = ClockDomain(io.dutClk, rstTx, config = dutCd.config)(I2sSlave(FeFrame.txSlave))
 
+    // --- SCK dla ESP32 ------------------------------------------------
+    // I2sMaster po resecie robi pusty prawy slot (WS = 1 przez slotBits
+    // okresow SCK) i dopiero potem pierwsza ramke. ESP32 slave przy takim
+    // starcie wysyla w pierwszym lewym slocie slowo prawe (~L) - na plytce
+    // pierwsza probka N0 kazdego biegu byla zanegowana. Dawny I2sMicRx
+    // opuszczal WS po jednym okresie SCK i ESP32 startowal dobrze, wiec
+    // ESP32 dostaje SCK dopiero od ostatniego bitu slotu wstepnego: widzi
+    // jedno narastajace zbocze przy WS = 1, potem ramke - jak wczesniej.
+    // DUT (i nadajnik powrotny) chodzi na pelnym SCK; slot wstepny DUT
+    // i tak odrzuca. Po kazdym resecie DUT-a od nowa (domena dut).
+    val espGate = new ClockingArea(dutDom) {
+      val S     = v.fe.i2s.slotBits
+      val sckD  = RegNext(front.io.sck) init False
+      val falls = Reg(UInt(log2Up(S) bits)) init 0
+      val open  = RegInit(False)
+      when(sckD && !front.io.sck && !open) {
+        falls := falls + 1
+        when(falls === U(S - 2)) { open := True }   // po S - 1 opadajacych: zostaje ostatni bit slotu
+      }
+    }
+
     // --- piny --------------------------------------------------------
     front.io.sd := io.i2s.sdIn
-    io.i2s.sckOut := front.io.sck
+    io.i2s.sckOut := front.io.sck && espGate.open   // open zmienia sie przy SCK = 0
     io.i2s.wsOut  := front.io.ws
     io.i2s.clkOe  := clkOe
     tx.io.pins.sck := front.io.sck

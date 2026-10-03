@@ -4,7 +4,7 @@ Uzupełnienie `../commands.md` o to, co zna frontend: DUT to `MicFrontEnd` z `fr
 
 ```
 PC --load--> ESP32 PSRAM --SD_E2F--> I2sMicRx -> DcFilter -> (y, x) --SD_F2E--> ESP32 PSRAM --rec--> PC
-                 ^ SCK/WS z I2sMicRx (FPGA master, 75 MHz / 73 / 64 = 16 053 Hz) ^
+                 ^ SCK/WS z I2sMicRx = I2sMaster (FPGA master, 75 MHz / 73 / 64 = 16 053 Hz) ^
 ```
 
 Kod: `FeFrame`, `FeHilRegs` i `FeHilVariant` w `fpga/hw/spinal/main/fe/FeHilRegs.scala`. Tę samą definicję czytają harness i host, a ocenę robi `FeCheck` (`fpga/hw/spinal/test/fe/`). Przy rozbieżności z tym plikiem wygrywa kod.
@@ -132,7 +132,7 @@ Kolejność biegu (host):
 
 ## FPGA: wariant
 
-Rejestr `variant` (`0x006`) = `bclkDiv | guardBits << 8 | sampleWidth << 16 | typ << 24`, gdzie typ to `0xFE` dla N0 + N1 i `0xF4` dla N0 – N4. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
+Rejestr `variant` (`0x006`) = `sckDiv | guardBits << 8 | sampleWidth << 16 | typ << 24`, gdzie typ to `0xFE` dla N0 + N1 i `0xF4` dla N0 – N4. Najstarszy bajt odróżnia bitstream FE od I2S (tam 0).
 
 | Nazwa | Zegar `dut` | Dzielnik | fs | Plik |
 | --- | --- | --- | --- | --- |
@@ -158,7 +158,7 @@ Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne reje
 | --- | --- | --- |
 | `0x010` | `sent` | ramki oddane nadajnikowi powrotnemu |
 | `0x011` | `frames` | próbki N1 w biegu (ramki wyniku) |
-| `0x012` | `underrun` | ramki ciszy nadajnika powrotnego w biegu (kilka na rozbiegu) |
+| `0x012` | `underrun` | ramki ciszy nadajnika powrotnego w biegu (kilka na rozbiegu i jedna po każdym resecie DUT-a: I2sMaster oddaje pierwszą próbkę razem z pobraniem ramki przez nadajnik) |
 | `0x013` | `overflow` | próbka N1 przy pełnej kolejce do nadajnika; ma być 0 |
 | `0x014` | `dc_overrun` | lepki `overrun` filtra; ma być 0 |
 | `0x015` | `x_sum` | suma u32 `x` (ze znakiem rozszerzonym do 32 b) wysłanych ramek |
@@ -174,3 +174,5 @@ Zapis tylko w stanie stop, zatrzaśnięcie przy starcie (jak I2S). Wspólne reje
 **`status` (`0x005`):** bit 1 (`locked`) oznacza, że DUT taktuje (SCK biegnie); po `stop` gaśnie na granicy ramki po `tail` próbkach. Bit 2 (`error`) oznacza `overflow`, `overrun` filtra lub Framera, `n4_aux_drop` albo `n4_order`.
 
 **Piny:** jak I2S (`../i2s/commands.md`, P7). SCK i WS są wyjściami od pierwszego `start` do soft resetu; wcześniej są w wysokiej impedancji, więc FPGA nie walczy z ESP32 z firmware'em I2S w roli master. TRIG jest wysoko, gdy `HilResetInjector` trzyma DUT w resecie.
+
+**SCK dla ESP32 bez slotu wstępnego.** I2sMaster po każdym resecie robi pusty prawy slot (WS = 1 przez 32 okresy SCK), a dopiero potem pierwszą ramkę. ESP32 slave przy takim starcie wysyła w pierwszym lewym slocie słowo prawe (`~L`): na płytce pierwsza próbka N0 każdego biegu była zanegowana, reszta zgodna. Dlatego pin SCK dostaje zegar dopiero od ostatniego bitu slotu wstępnego (`FeHarness.espGate`): ESP32 widzi jedno narastające zbocze przy WS = 1, potem ramkę, jak przy dawnym I2sMicRx. DUT i nadajnik powrotny chodzą na pełnym SCK. Symulacja sprawdza ten przebieg na pinach w każdym scenariuszu.

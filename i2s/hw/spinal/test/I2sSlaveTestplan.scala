@@ -682,8 +682,10 @@ class I2sSlaveTestplan extends TestplanSuite {
 //  moglby miec ten sam blad co DUT.
 //
 //  Zegar wspolny, wiec faza SCK jest stala; asynchronicznosc pokrywa
-//  I2sSlaveTestplan. halfDiv = 4 to dokladnie granica: slave wystawia bit
-//  3 cykle po opadajacym (txLatencyCycles), master probkuje na 4.
+//  I2sSlaveTestplan. sckLow = 4 to dokladnie granica: slave wystawia bit
+//  3 cykle po opadajacym (txLatencyCycles), master probkuje na narastajacym,
+//  sckLow cykli po opadajacym. Liczy sie faza NISKA - przy nieparzystym
+//  sckDiv to dluzsza polowka (I2sGenerics.sckLow = ceil(sckDiv/2)).
 // =====================================================================
 case class I2sPair(gm : I2sGenerics, gs : I2sSlaveGenerics) extends Component {
   require(gm.width == gs.width, "para zaklada te sama szerokosc slowa")
@@ -708,23 +710,25 @@ class I2sPairTestplan extends TestplanSuite {
   def testplan : Seq[Testpoint] = Seq(
     Testpoint("pair_param_bounds", Stage.V1,
       "Kazda para spelnia ograniczenie slave'a przy SCK mastera",
-      checking = Seq("halfDiv mastera > txLatencyCycles slave'a")),
+      checking = Seq("sckLow mastera > txLatencyCycles slave'a (faza niska, w niej slave zmienia SD)")),
     Testpoint("pair_master_slave_duplex", Stage.V2,
       "I2sMaster i I2sSlave na wspolnych liniach, oba kierunki naraz",
       stimulus = Seq("12 losowych, niezerowych ramek w kazda strone, rownolegle"),
       checking = Seq("slave.rx bez ciszy == ramki mastera.tx",
                      "master.rx bez ciszy == ramki slave.tx")))
 
-  // 24.576 MHz / (48k * 64 * 2) = 4 - granica; 49.152 MHz -> 8
+  // sckDiv = 24.576 MHz / (48k * 64) = 8, sckLow 4 - granica; 49.152 MHz -> 16
+  // sckDiv = 21.504 MHz / (48k * 64) = 7 - nieparzysty na granicy: nisko 4, wysoko 3
   val pairs = Seq(
-    "hd4" -> I2sGenerics(24576 kHz, 48 kHz, width = 16, slotWidth = 32),
-    "hd8" -> I2sGenerics(49152 kHz, 48 kHz, width = 16, slotWidth = 32))
+    "hd4"  -> I2sGenerics(24576 kHz, 48 kHz, width = 16, slotWidth = 32),
+    "hd8"  -> I2sGenerics(49152 kHz, 48 kHz, width = 16, slotWidth = 32),
+    "odd7" -> I2sGenerics(21504 kHz, 48 kHz, width = 16, slotWidth = 32))
 
   testpoint("pair_param_bounds") {
     for ((n, gm) <- pairs) {
       val gs = I2sSlaveGenerics(gm.width)
-      info(s"$n: halfDiv=${gm.halfDiv}, txLatency=${gs.txLatencyCycles}")
-      assert(gs.supportsSckHalf(gm.halfDiv), s"$n: slave nie zdazy przy halfDiv=${gm.halfDiv}")
+      info(s"$n: sckDiv=${gm.sckDiv} (nisko ${gm.sckLow}, wysoko ${gm.sckHigh}), txLatency=${gs.txLatencyCycles}")
+      assert(gs.supportsSckHalf(gm.sckLow), s"$n: slave nie zdazy przy sckLow=${gm.sckLow}")
     }
   }
 

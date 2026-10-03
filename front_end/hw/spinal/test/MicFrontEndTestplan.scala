@@ -81,12 +81,12 @@ object MicFrontEndPlan {
   )
 
   case class Cfg(name: String, fe: FrontEndGenerics, fr: FramerGenerics)
-  // Dzielnik 8 (dolna granica I2S) skraca symulacje 9x wobec Mimasa;
-  // numeryka toru od dzielnika nie zalezy.
-  val fast = FrontEndGenerics(I2sMicGenerics(clockHz = 8L * 64 * 16000, bclkDiv = 8))
+  // sckDiv 3 (dolna granica, nieparzysty) skraca symulacje 24x wobec
+  // Mimasa; numeryka toru od dzielnika nie zalezy.
+  val fast = FrontEndGenerics(I2sMicGenerics(clockHz = 3L * 64 * 16000, sckDiv = 3))
   val configs = Seq(
-    Cfg("d8_l16_h6",    fast, FramerGenerics(16, 6)),
-    Cfg("d8_l512_h160", fast, FramerGenerics())          // rozmiar z kontraktu
+    Cfg("s3_l16_h6",    fast, FramerGenerics(16, 6)),
+    Cfg("s3_l512_h160", fast, FramerGenerics())          // rozmiar z kontraktu
   )
   def nSamples(fr: FramerGenerics) = fr.fftSize + 2 * fr.hop
 }

@@ -279,7 +279,10 @@ class FeHilTestplan extends HilSuite {
       assert(es.overflow == 0, s"ESP32: przepelnienie DMA RX ${es.overflow}")
       assert(fc("overflow") == 0 && fc("dc_overrun") == 0, s"FPGA: $fc")
       assert(fc("sent") == fc("frames"), s"FPGA sent ${fc("sent")} != frames ${fc("frames")}")
-      assert(fc("underrun") <= 4, s"FPGA underrun ${fc("underrun")}: wiecej niz rozbieg nadajnika powrotnego")
+      // rozbieg nadajnika powrotnego + jedna ramka ciszy po kazdym resecie DUT-a
+      // (slot wstepny I2sMastera: pierwsza probka przychodzi z pobraniem ramki)
+      assert(fc("underrun") <= 4 + fc("rst_done"),
+             s"FPGA underrun ${fc("underrun")}: wiecej niz rozbieg nadajnika powrotnego + ${fc("rst_done")} resetow")
       assert(nrec < RecCap, "nagranie pelne: wynik niekompletny")
       assert(fc("frames") == rep.frames.size + rep.lost, s"FPGA frames ${fc("frames")}, nagranie ${rep.frames.size} + ${rep.lost}")
       if (rep.lost == 0)

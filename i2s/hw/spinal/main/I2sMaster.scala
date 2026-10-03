@@ -7,6 +7,8 @@ import spinal.lib._
 //  I2S MASTER, format Philips, stereo, TX + RX.
 //
 //  Kontrakt (ten sam co w naglowku I2sMasterTestplan):
+//   - SCK: okres sckDiv cykli, nisko sckLow = ceil(sckDiv/2), wysoko
+//     sckHigh = floor(sckDiv/2); nieparzysty dzielnik dozwolony,
 //   - po resecie SCK=0, WS=1, SDO=0; ramka zaczyna sie opadajacym WS,
 //     wiec przed pierwsza ramka jest jeden pusty prawy slot,
 //   - WS i SDO zmieniaja sie razem z opadajacym SCK, SDI jest
@@ -18,8 +20,8 @@ import spinal.lib._
 //
 //  SDI nie ma synchronizatora celowo. Dane przychodza synchronicznie do
 //  SCK, ktory sami generujemy, a synchronizator przesunalby probkowanie
-//  o 2 cykle i przy halfDiv = 1 wypchnal je poza okno waznosci bitu
-//  (patrz I2sCodecModel.minHalfDiv). Na FPGA zostaje rejestr w IOB.
+//  o 2 cykle i przy sckDiv = 2 wypchnal je poza okno waznosci bitu
+//  (patrz I2sCodecModel.minSckDiv). Na FPGA zostaje rejestr w IOB.
 // =====================================================================
 
 // Szerokosc zamiast I2sGenerics: ten sam typ ramki uzywa I2sSlave, ktory
@@ -38,6 +40,7 @@ case class I2sPins() extends Bundle with IMasterSlave {
 case class I2sMaster(g : I2sGenerics) extends Component {
   require(g.isLegal, s"nielegalne generyki: $g")
   require(g.slotWidth >= 2, "slotWidth >= 2 (opoznienie o bit potrzebuje dwoch pozycji)")
+  require(g.sckHigh >= 1, s"sckDiv = ${g.sckDiv} < 2")
 
   val io = new Bundle {
     val tx       = slave(Stream(I2sFrame(g.width)))
@@ -49,12 +52,16 @@ case class I2sMaster(g : I2sGenerics) extends Component {
   private val S = g.slotWidth
 
   // -------------------------------------------------------------------
-  //  Zegar bitowy. tick = jedno zbocze SCK co halfDiv cykli.
-  //  halfDiv = 1 osobno: Counter(1) mialby licznik zerowej szerokosci.
+  //  Zegar bitowy. phase liczy pelny okres SCK (sckDiv cykli): SCK
+  //  wstaje po sckLow cyklach, opada na koncu okresu. Przy parzystym
+  //  sckDiv przebieg jest identyczny co do cyklu z dawnym licznikiem
+  //  polokresu (tick co halfDiv); przy nieparzystym faza niska jest
+  //  o cykl dluzsza.
   // -------------------------------------------------------------------
-  val tick = Bool()
-  if (g.halfDiv == 1) tick := True
-  else tick := Counter(g.halfDiv, inc = True).willOverflow
+  val phase = Reg(UInt(log2Up(g.sckDiv) bits)) init 0
+  val rise  = phase === U(g.sckLow - 1)
+  val fall  = phase === U(g.sckDiv - 1)
+  when(fall) { phase := 0 } otherwise { phase := phase + 1 }
 
   val sck    = Reg(Bool()) init False
   val ws     = Reg(Bool()) init True
@@ -63,12 +70,11 @@ case class I2sMaster(g : I2sGenerics) extends Component {
   // numer narastajacego zbocza w slocie (0 = pierwsze po zboczu WS).
   val bitCnt = Reg(UInt(log2Up(S) bits)) init 0
 
-  val rise       = tick && !sck
-  val fall       = tick &&  sck
   val slotStart  = fall && bitCnt === S - 1
   val frameStart = slotStart && ws               // WS 1 -> 0
 
-  when(tick) { sck := !sck }
+  when(rise) { sck := True }
+  when(fall) { sck := False }
   when(fall) {
     when(slotStart) { bitCnt := 0; ws := !ws }
       .otherwise    { bitCnt := bitCnt + 1 }

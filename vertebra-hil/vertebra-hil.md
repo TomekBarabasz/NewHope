@@ -263,7 +263,7 @@ Orkiestrator zawsze zaczyna od `ver` / odczytu `0x000`–`0x003` i porównuje we
 
 ## 6. Harness FPGA
 
-Jeden bitstream na **wariant** IP, zawierający wspólny rdzeń (UART, rejestry, liczniki, bufor, wstrzykiwanie resetu) i część I2S (oba DUT-y, generator, checker, multipleks pinów). Generyki DUT-ów (`width`, `slotWidth`, `halfDiv`) są ustalane przy elaboracji, więc każda kombinacja z listy konfiguracji (§8) to osobny bitstream: dla I2S 16/32, 24/32, 16/16 i 32/32. Wariant jest w rejestrze `variant`, a `HilBench` wgrywa właściwy bitstream sam i grupuje testy według wariantów. Rola master/slave jest rejestrem (multipleks pinów). fs mastera ustawia M/D zegara `dut` (DCM\_CLKGEN), a nie dzielnik.
+Jeden bitstream na **wariant** IP, zawierający wspólny rdzeń (UART, rejestry, liczniki, bufor, wstrzykiwanie resetu) i część I2S (oba DUT-y, generator, checker, multipleks pinów). Generyki DUT-ów (`width`, `slotWidth`, `sckDiv`) są ustalane przy elaboracji, więc każda kombinacja z listy konfiguracji (§8) to osobny bitstream: dla I2S 16/32, 24/32, 16/16 i 32/32. Wariant jest w rejestrze `variant`, a `HilBench` wgrywa właściwy bitstream sam i grupuje testy według wariantów. Rola master/slave jest rejestrem (multipleks pinów). fs mastera ustawia M/D zegara `dut` (DCM\_CLKGEN), a nie dzielnik.
 
 ### Płytka: co z niej wynika
 

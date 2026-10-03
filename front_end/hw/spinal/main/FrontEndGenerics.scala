@@ -1,6 +1,7 @@
 package newhope.frontend
 
 import spinal.core._
+import newhope.i2s.I2sGenerics
 
 // =====================================================================
 //  Parametry N0 (I2S RX z INMP441) i N1 (filtr DC).
@@ -10,47 +11,51 @@ import spinal.core._
 //  definicji korzysta RTL, golden model i testy bez symulacji.
 // =====================================================================
 
-/** N0 · I2S RX. Odbiornik jest masterem: sam generuje SCK i WS.
+/** N0 · I2S RX na newhope.com.i2s.I2sMaster.
   *
-  * Ramka I2S: 2 sloty po `slotBits` taktow SCK, WS = 0 to lewy kanal.
-  * INMP441 (L/R = GND) nadaje w lewym slocie 24-bitowe slowo MSB-first,
-  * z opoznieniem jednego taktu SCK wzgledem zmiany WS, dane zmienia na
-  * zboczu opadajacym, odbiornik probkuje na narastajacym.
+  * I2sMaster jest masterem Philips: sam generuje SCK i WS. Dzielnik
+  * pelnego okresu SCK moze byc nieparzysty, wiec kontraktowe 73 (D-006)
+  * daje SCK = 75 MHz / 73 i fs = 16 053,08 Hz (+0,33%, +5,7 ct);
+  * SCK nisko 37 cykli, wysoko 36.
   *
-  * Wyjscie: gorne `sampleWidth` bitow slowa, czyli slowo24[23:6] dla 18.
-  * Obciecie, nie zaokraglenie (kontrakt, wejscie audio).
+  * INMP441 (L/R = GND) nadaje w lewym slocie 24-bitowe slowo MSB-first.
+  * Master bierze ze slotu `sampleWidth` najstarszych pozycji, czyli dla 18
+  * dokladnie slowo24[23:6] (obciecie, kontrakt).
   */
 case class I2sMicGenerics(clockHz    : Long    = 75000000L,  // c3_clk0 (D-006)
-                          bclkDiv    : Int     = 73,         // BCLK = 75 MHz / 73
+                          sckDiv     : Int     = 73,         // SCK = clk / 73
                           slotBits   : Int     = 32,
                           wordBits   : Int     = 24,
                           sampleWidth: Int     = 18,
-                          leftChannel: Boolean = true,
-                          syncStages : Int     = 2) {
+                          leftChannel: Boolean = true) {
+  /** Generyki I2sMastera; jedyne zrodlo podzielnikow (I2sGenerics). */
+  def i2s: I2sGenerics =
+    I2sGenerics.fromSckDiv(HertzNumber(BigDecimal(clockHz)), sckDiv, sampleWidth, slotBits)
+
+  def sckLow          = (sckDiv + 1) / 2         // jak I2sGenerics.sckLow
+  def sckHigh         = sckDiv / 2
   def frameBits       = 2 * slotBits
-  def sckLow          = bclkDiv / 2              // przy nieparzystym dzielniku SCK
-  def sckHigh         = bclkDiv - sckLow         // jest o cykl dluzej wysoko
-  def cyclesPerSample = bclkDiv.toLong * frameBits
+  def cyclesPerSample = sckDiv.toLong * frameBits
   def fs              = clockHz.toDouble / cyclesPerSample
-  def bclkHz          = clockHz.toDouble / bclkDiv
+  def bclkHz          = clockHz.toDouble / sckDiv
   def dropBits        = wordBits - sampleWidth
 
   /** Odstrojenie wysokosci wzgledem nominalnych 16 kHz, w centach. */
   def cents(nominal: Double = 16000.0) = 1200 * math.log(fs / nominal) / math.log(2)
 
-  /** Narastajace zbocze SCK wypada sckLow cykli po opadajacym. SD przechodzi
-    * przez synchronizator (syncStages), a model mikrofonu w symulacji widzi
-    * zbocze z opoznieniem jednego cyklu: stad syncStages + 2. Na plytce
-    * zapas jest ogromny (36 cykli = 480 ns wobec opoznienia danych INMP441
-    * rzedu kilkudziesieciu ns). */
-  def sampleMargin = sckLow - (syncStages + 2)
+  /** I2sMaster probkuje SDI bez synchronizatora na narastajacym SCK,
+    * sckLow cykli po opadajacym. Model mikrofonu w symulacji wystawia bit
+    * najpozniej cykl po zboczu, stad sckLow >= 2, czyli sckDiv >= 3 (przy
+    * 2 model cyklowy gubi bity). Na plytce: 37 cykli = 493 ns wobec
+    * opoznienia danych INMP441 rzedu kilkudziesieciu ns. */
+  def sampleMargin = sckLow - 2
 
   def problems: Seq[String] = Seq(
-    isPow2(slotBits)                         -> s"slotBits = $slotBits nie jest potega 2",
-    (wordBits + 1 <= slotBits)               -> s"slowo $wordBits b + bit opoznienia I2S nie miesci sie w slocie $slotBits",
+    (sckDiv >= 2)                            -> s"sckDiv = $sckDiv < 2",
     (sampleWidth >= 2 && sampleWidth <= wordBits) -> s"sampleWidth = $sampleWidth poza [2, $wordBits]",
-    (syncStages >= 2)                        -> s"syncStages = $syncStages < 2",
-    (sampleMargin >= 0)                      -> s"bclkDiv = $bclkDiv za maly: SD probkowane $sckLow cykli po zboczu, potrzeba ${syncStages + 2}"
+    (wordBits + 1 <= slotBits)               -> s"slowo $wordBits b + bit opoznienia I2S nie miesci sie w slocie $slotBits",
+    (sampleMargin >= 0)                      -> s"sckDiv = $sckDiv: SDI probkowane $sckLow cykli po zboczu, potrzeba 2",
+    (sckDiv < 1 || i2s.isLegal)              -> "I2sGenerics nielegalne (sckDiv niecalkowity albo width > slotWidth)"
   ).collect { case (false, msg) => msg }
   def isLegal = problems.isEmpty
 

@@ -19,19 +19,19 @@ object I2sMicRxPlan {
   val plan: Seq[Testpoint] = Seq(
     Testpoint("i2s_param_bounds", Stage.V1,
       "Konfiguracje legalne, fs i odstrojenie z dzielnika",
-      checking = Seq("I2sMicGenerics.isLegal (w tym sckLow >= syncStages + 2)",
+      checking = Seq("I2sMicGenerics.isLegal (w tym I2sGenerics.isLegal i sckLow >= 2)",
                      "Mimas: fs = 75 MHz / 73 / 64, w zakresie INMP441, odstrojenie < 10 centow")),
     Testpoint("i2s_pin_timing", Stage.V1,
       "SCK i WS zgodne z dzielnikiem i z I2S",
       stimulus = Seq("3 ramki I2S bez danych"),
-      checking = Seq("okres SCK = bclkDiv, wysoko sckHigh, nisko sckLow",
+      checking = Seq("okres SCK = sckDiv, nisko sckLow = ceil(sckDiv/2), wysoko sckHigh",
                      "WS zmienia sie tylko razem z opadajacym SCK",
                      "WS: slotBits taktow SCK nisko, slotBits wysoko")),
     Testpoint("i2s_smoke", Stage.V1,
       "Losowe slowa 24-bitowe w naszym kanale, smieci w drugim",
       stimulus = Seq("24 losowe slowa; drugi kanal, bit opoznienia i bity 25..32 losowe"),
       checking = Seq("probki == slowo >> (24 - sampleWidth), w kolejnosci",
-                     "pierwsza probka to pierwszy pelny slot po resecie (bez polowek)")),
+                     "pierwsza probka to pierwsza pelna ramka po resecie (slot wstepny ignorowany)")),
     Testpoint("i2s_reset", Stage.V1,
       "Reset w trakcie odbioru",
       stimulus = Seq("reset w srodku slowa, potem nowy strumien"),
@@ -45,10 +45,10 @@ object I2sMicRxPlan {
 
   case class Cfg(name: String, g: I2sMicGenerics)
   val configs = Seq(
-    Cfg("mimas",    I2sMicGenerics()),                                   // 75 MHz / 73, nieparzysty dzielnik
-    Cfg("d8",       I2sMicGenerics(clockHz = 8L * 64 * 16000, bclkDiv = 8)),                // dolna granica: sckLow = 4
-    Cfg("d9_right", I2sMicGenerics(clockHz = 9L * 64 * 16000, bclkDiv = 9, leftChannel = false)),
-    Cfg("d8_w24",   I2sMicGenerics(clockHz = 8L * 64 * 16000, bclkDiv = 8, sampleWidth = 24)) // cale slowo
+    Cfg("mimas",    I2sMicGenerics()),                                   // 75 MHz / 73, nieparzysty, fs niecalkowite
+    Cfg("s3",       I2sMicGenerics(clockHz = 3L * 64 * 16000, sckDiv = 3)),                      // dolna granica: sckLow = 2
+    Cfg("s4_right", I2sMicGenerics(clockHz = 4L * 64 * 16000, sckDiv = 4, leftChannel = false)),
+    Cfg("s3_w24",   I2sMicGenerics(clockHz = 3L * 64 * 16000, sckDiv = 3, sampleWidth = 24))     // cale slowo
   )
 
   def randWord(rng: Random) = (rng.nextInt(1 << 24) - (1 << 23)).toLong
@@ -93,7 +93,7 @@ class I2sMicRxTestplan extends TestplanSuite {
 
     scenario("i2s_pin_timing") { (d, rng) =>
       val cd = d.clockDomain
-      waitFor(cd, d.io.sck.toBoolean, 4L * g.bclkDiv, "pierwsze SCK")
+      waitFor(cd, d.io.sck.toBoolean, 4L * g.sckDiv, "pierwsze SCK")
       val sck = mutable.ArrayBuffer[Boolean]()
       val ws  = mutable.ArrayBuffer[Boolean]()
       for (_ <- 0L until 3 * g.cyclesPerSample) {
@@ -104,15 +104,15 @@ class I2sMicRxTestplan extends TestplanSuite {
       val rises = (1 until sck.size).filter(i => sck(i) && !sck(i - 1))
       val falls = (1 until sck.size).filter(i => !sck(i) && sck(i - 1))
       val per   = rises.zip(rises.tail).map { case (a, b) => b - a }.distinct
-      assert(per == Seq(g.bclkDiv), s"okres SCK $per, oczekiwano ${g.bclkDiv}")
+      assert(per == Seq(g.sckDiv), s"okres SCK $per, oczekiwano ${g.sckDiv}")
       val highs = rises.flatMap(r => falls.find(_ > r).map(_ - r)).distinct
       val lows  = falls.flatMap(f => rises.find(_ > f).map(_ - f)).distinct
       assert(highs == Seq(g.sckHigh) && lows == Seq(g.sckLow), s"SCK wysoko $highs, nisko $lows")
       val wsCh  = (1 until ws.size).filter(i => ws(i) != ws(i - 1))
       assert(wsCh.forall(falls.contains), s"WS zmienia sie poza opadajacym SCK: ${wsCh.filterNot(falls.contains)}")
       val wsPer = wsCh.zip(wsCh.tail).map { case (a, b) => b - a }.distinct
-      assert(wsPer == Seq(g.slotBits * g.bclkDiv), s"slot WS $wsPer cykli, oczekiwano ${g.slotBits * g.bclkDiv}")
-      info(s"$cfgName: SCK ${g.sckHigh}/${g.sckLow} cykli, slot ${g.slotBits * g.bclkDiv} cykli")
+      assert(wsPer == Seq(g.slotBits * g.sckDiv), s"slot WS $wsPer cykli, oczekiwano ${g.slotBits * g.sckDiv}")
+      info(s"$cfgName: SCK ${g.sckHigh}/${g.sckLow} cykli, slot ${g.slotBits * g.sckDiv} cykli")
     }
 
     scenario("i2s_smoke") { (d, rng) =>
@@ -130,7 +130,7 @@ class I2sMicRxTestplan extends TestplanSuite {
       quietDuringReset(cd, d.io.output.valid, "out")
       // stary strumien: zatrzymany w polowie slowa
       val old = new MicModel(d.io.sck, d.io.ws, d.io.sd, cd, g, Seq.fill(100)(randWord(rng)), rng)
-      cd.waitSampling((2.5 * g.cyclesPerSample).toInt + g.slotBits / 2 * g.bclkDiv)
+      cd.waitSampling((2.5 * g.cyclesPerSample).toInt + g.slotBits / 2 * g.sckDiv)
       cd.assertReset()
       cd.waitActiveEdge(20)
       assert(!d.io.sck.toBoolean, "SCK w resecie")
@@ -150,10 +150,13 @@ class I2sMicRxTestplan extends TestplanSuite {
     for (Cfg(name, g) <- configs) {
       assert(g.isLegal, s"$name: ${g.problems.mkString("; ")}")
       info(f"$name: BCLK ${g.bclkHz / 1e6}%.4f MHz, fs ${g.fs}%.2f Hz (${g.cents()}%+.2f ct), " +
-           s"${g.cyclesPerSample} cykli/probke, zapas probkowania SD ${g.sampleMargin} cykli")
+           s"${g.cyclesPerSample} cykli/probke, sckDiv ${g.i2s.sckDiv} (${g.sckLow}/${g.sckHigh}), zapas probkowania SD ${g.sampleMargin} cykli")
     }
     val m = I2sMicGenerics()
     assert(m.cyclesPerSample == 73L * 64, s"Mimas: ${m.cyclesPerSample} cykli na probke")
+    assert(m.cyclesPerSample == m.i2s.cyclesPerFrame, s"Mimas: wzor ${m.cyclesPerSample}, I2sGenerics ${m.i2s.cyclesPerFrame}")
+    assert(m.i2s.sckDiv == 73, s"Mimas: I2sGenerics.sckDiv ${m.i2s.sckDiv}")
+    assert(m.i2s.sckLow == m.sckLow && m.i2s.sckHigh == m.sckHigh, "Mimas: polokresy SCK != I2sGenerics")
     assert(math.abs(m.fs - 75e6 / (73 * 64)) < 1e-6, s"Mimas: fs ${m.fs}")
     assert(m.micInRange, s"Mimas: fs ${m.fs} poza zakresem INMP441")
     assert(math.abs(m.cents()) < 10, f"Mimas: odstrojenie ${m.cents()}%.2f ct")

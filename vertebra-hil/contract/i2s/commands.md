@@ -70,19 +70,19 @@ Jeden bitstream na wariant (`vertebra-hil.md` §6). Rejestr `variant` (`0x006`):
 | --- | --- |
 | 7:0 | `width` obu DUT-ów |
 | 15:8 | `slotWidth` mastera |
-| 23:16 | `halfDiv` mastera |
+| 23:16 | `sckDiv` mastera (pełny okres SCK w cyklach `dut`) |
 | 31:24 | 0 |
 
-Warianty (`I2sHilVariant`; zegar `dut` stały w wariancie, `dut = fs · 2 · slotWidth · 2 · halfDiv`):
+Warianty (`I2sHilVariant`; zegar `dut` stały w wariancie, `dut = fs · 2 · slotWidth · sckDiv`):
 
-| Nazwa | fs | width | slotWidth | halfDiv | dut |
+| Nazwa | fs | width | slotWidth | sckDiv | dut |
 | --- | --- | --- | --- | --- | --- |
-| `v16_32` | 48 kHz | 16 | 32 | 8 | 49,152 MHz |
-| `v24_32` | 44,1 kHz | 24 | 32 | 8 | 45,1584 MHz |
-| `v16_16` | 48 kHz | 16 | 16 | 16 | 49,152 MHz |
-| `v32_32` | 48 kHz | 32 | 32 | 8 | 49,152 MHz |
+| `v16_32` | 48 kHz | 16 | 32 | 16 | 49,152 MHz |
+| `v24_32` | 44,1 kHz | 24 | 32 | 16 | 45,1584 MHz |
+| `v16_16` | 48 kHz | 16 | 16 | 32 | 49,152 MHz |
+| `v32_32` | 48 kHz | 32 | 32 | 16 | 49,152 MHz |
 
-`halfDiv` jest dobrany tak, żeby w roli slave polokres SCK ESP32 (slot 32) miał około 8 cykli `dut`, przy wymaganiu slave'a > 3. Dynamiczne M/D zegara `dut` dochodzi osobnym krokiem przed `hw_clock_ratio_sweep`.
+`sckDiv` jest dobrany tak, żeby w roli slave polokres SCK ESP32 (slot 32) miał około 8 cykli `dut`, przy wymaganiu slave'a > 3. Do I2sMastera z obsługą nieparzystego dzielnika (gałąź `i2s-master-update-for-75MHz`) pole 23:16 niosło `halfDiv` = `sckDiv` / 2; przebieg SCK przy parzystym `sckDiv` jest ten sam co do cyklu, ale kod wariantu się zmienił, więc stare bitstreamy I2S host odrzuci jako nieznany wariant. Dynamiczne M/D zegara `dut` dochodzi osobnym krokiem przed `hw_clock_ratio_sweep`.
 
 ## FPGA: blok `0x100`–`0x1FF`
 
