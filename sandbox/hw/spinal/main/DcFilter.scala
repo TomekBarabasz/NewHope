@@ -2,6 +2,7 @@ package newhope.sandbox
 
 import spinal.core._
 import spinal.lib.{math => _, _}   // wszystko z spinal.lib poza math
+import spinal.lib.misc.pipeline._
 import spinal.core.sim._
 import spinal.lib.sim._
 import newhope.vertebra.sim.{SimEnv,SimBackend}
@@ -20,9 +21,14 @@ import scala.reflect.{ClassTag, classTag}
 
 case class DcFilterConfig(fs: Double, fc: Double = 30.0, G: Int = 8, nSptTerms: Int = 2) {
   val dw = 18
-  val aw  = dw + 3 + G
+  val intBits  = dw + 3   // zapas na |y| do ~2x plus marginesy
+  val fracBits = G        // bity ochronne
+  val aw = intBits + fracBits
+  // y_real = y_raw * 2^-G   (Q(intBits).(fracBits))
+
   val k   = 2 * math.Pi * fc / fs
   val terms = spt(k, nSptTerms, aw - 1) // Seq[(sign, shift)]
+  val latency: Int = 4
 
   def spt(k: Double, nTerms: Int, maxShift: Int): Seq[(Int, Int)] = {
     val terms = ArrayBuffer[(Int, Int)]()
@@ -209,11 +215,123 @@ case class DcFilterFlow(c : DcFilterConfig) extends DcFilter(c) {
 }
 
 case class DcFilterPipeline(c : DcFilterConfig) extends DcFilter(c) {
-   import c._
+   import c._    
+    
+    // ---- węzły i rejestry między nimi ----
+    val n     = Array.fill(5)(Node())
+    val links = (0 until latency).map(i => StageLink(n(i), n(i + 1)))
+    
+    // payloady niesione przez potok
+    val X    = Payload(SInt(dw bits))
+    val D    = Payload(SInt(dw + 1 bits))
+    val ACC  = Payload(SInt(aw bits))
+    val R    = terms.zipWithIndex.map { case (_, i) => Payload(SInt(aw bits)).setName(s"R$i") }
+    val YOUT = Payload(SInt(dw bits))
 
-    io.output.payload := io.output.payload.getZero
-    io.output.valid   := False
-    io.overrun := False
+    // stan filtra poza potokiem
+    val x1 = RegNextWhen(io.input.payload, io.input.valid) init S(0, dw bits)
+    val y  = Reg(SInt(aw bits)) init 0
+
+    // ---- wejście (Flow: brak ready, więc logika halt znika) ----
+    n(0).valid := io.input.valid
+    n(0)(X)    := io.input.payload
+
+    // ---- A (cykl 0): D = x - x1 ----
+    n(0)(D) := n(0)(X).resize(dw + 1) - x1.resize(dw + 1)
+
+    // ---- B (cykl 1): P = (D << G) + Y1,  R_i = roundShr(Y1, s_i) ----
+    n(1)(ACC) := (n(1)(D) << G).resize(aw) + y
+    for (((_, s), i) <- terms.zipWithIndex) {
+        n(1)(R(i)) := DcFilterHw.roundShr(y, s).resize(aw)
+    }
+
+    // ---- C (cykl 2): Y1 := P - sum(sign_i * R_i) ----
+    val ops = (n(2)(ACC), false) +: terms.zipWithIndex.map {
+        case ((sg, _), i) => (n(2)(R(i)), sg > 0)
+    }
+    val (yNext, neg) = DcFilterHw.signedSum(ops)
+    assert(!neg)
+    when(n(2).isValid) { y := yNext }
+
+    // ---- wyjście (cykl 3, rejestrowane do n4) ----
+    val yRound = DcFilterHw.roundShr(y, G)
+    val ySat   = yRound.sat(yRound.getWidth - dw)
+    n(3)(YOUT) := Mux(io.bypass, n(3)(X), ySat)
+
+    io.output.valid   := n(4).isValid
+    io.output.payload := n(4)(YOUT)
+
+    // ---- overrun: nowa próbka, gdy poprzednia jest jeszcze w A ----
+    val overrunReg = RegInit(False) setWhen (n(0).isValid && n(1).isValid)
+    io.overrun := overrunReg
+
+    Builder(links)
+}
+
+case class DcFilterPipeline2(c : DcFilterConfig) extends DcFilter(c) {
+   import c._    
+
+  // ---- węzły: n0 -A-> n1 -B-> n2 -C-> n3 -wyj-> n4 ----
+  val n0, n1, n2, n3, n4 = Node()
+  val links = Seq(
+    StageLink(n0, n1),
+    StageLink(n1, n2),
+    StageLink(n2, n3),
+    StageLink(n3, n4)
+  )
+
+  // ---- stan filtra (sprzężenie zwrotne, poza potokiem) ----
+  val y = Reg(SInt(aw bits)) init 0
+
+  // ---- A (cykl 0): wejście, D = x - x1 ----
+  // val X    = Payload(SInt(dw bits)) na zewnatrz n0
+  // i w n0: driveFrom(io.input)((self, p) => self(X) := p)
+
+  val stageA = new n0.Area {
+    arbitrateFrom(io.input)
+    val X  = insert(io.input.payload)
+    val x1 = RegNextWhen(X: SInt, isValid) init 0
+    val D  = insert(X.resize(dw + 1) - x1.resize(dw + 1))
+  }
+
+  // ---- B (cykl 1): P = (D << G) + Y1,  R_i = roundShr(Y1, s_i) ----
+  val stageB = new n1.Area {
+    val ACC = insert((stageA.D << G).resize(aw) + y)
+    val R = terms.zipWithIndex.map { case ((_, s), i) =>
+      insert(DcFilterHw.roundShr(y, s).resize(aw)).setName(s"R_$i")
+    }
+  }
+
+  // ---- C (cykl 2): Y1 := P - sum(sign_i * R_i) ----
+  val stageC = new n2.Area {
+    // przypisanie typu (x: SInt) wymusza konwersję Payload -> SInt wewnątrz krotki
+    val ops = (stageB.ACC: SInt, false) +: terms.zipWithIndex.map {
+      case ((sg, _), i) => (stageB.R(i): SInt, sg > 0)
+    }
+    val (yNext, neg) = DcFilterHw.signedSum(ops)
+    assert(!neg)
+    when(isValid) { y := yNext }
+  }
+
+  // ---- wyjście (cykl 3): saturacja + bypass ----
+  val stageOut = new n3.Area {
+    val yRound = DcFilterHw.roundShr(y, G)
+    val ySat   = yRound.sat(yRound.getWidth - dw)
+    val YOUT   = insert(Mux(io.bypass, stageA.X: SInt, ySat))
+  }
+
+  // ---- cykl 4: zarejestrowane wyjście ----
+  val output = new n4.Area {
+    //io.output.valid   := isValid
+    //io.output.payload := YOUT
+    driveTo(io.output)((p, self) => p := self(stageOut.YOUT))
+  }
+
+  // ---- overrun: nowa próbka, gdy poprzednia jest jeszcze w A ----
+  val overrunReg = RegInit(False) setWhen (n0.isValid && n1.isValid)
+  io.overrun := overrunReg
+
+  Builder(links)
 }
 
 class DcFilterModel(c: DcFilterConfig) {
@@ -249,9 +367,10 @@ case class DcFilterVersions(c: DcFilterConfig) {
     Variant(classTag[T].runtimeClass.getSimpleName, () => f)
 
   private val variants: Map[String, Variant] = Map(
-    "v1" -> variant(DcFilterReg(c)),
-    "v2" -> variant(DcFilterFlow(c)),
-    "v3" -> variant(DcFilterPipeline(c))
+    "reg" -> variant(DcFilterReg(c)),
+    "flow" -> variant(DcFilterFlow(c)),
+    "pipe" -> variant(DcFilterPipeline(c)),
+    "pipe2" -> variant(DcFilterPipeline2(c))
   )
 
   val names: Seq[String] = variants.keys.toSeq.sorted
@@ -317,7 +436,7 @@ object DcFilterDemoSim extends App {
 object DcFilterTest extends App {
   val cfg = DcFilterConfig(fs = 75e6 / 4672)
   val versions = DcFilterVersions(cfg)
-  val name = args.headOption.getOrElse("v1")
+  val name = args.headOption.getOrElse("reg")
   lazy val compiled = versions.compile(name)
 
   // Test 1: bit-exact vs model, przelaczanie bypass, usuwanie DC
