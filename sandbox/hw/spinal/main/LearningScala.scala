@@ -46,8 +46,8 @@ object ScalaTest {
       println(s"sign = $sign, shift = $shift")
     }
   }
-  def main(args: Array[String]): Unit = {
-    test_spt()
+
+  def test_foreach() {
     val S = Seq( 1,2,3 )
     S.foreach {case (s) => println(s) }
     val maxShift = 10
@@ -55,5 +55,18 @@ object ScalaTest {
     atoms.foreach { case (sign,shift) =>
       println(s"sign = $sign, shift = $shift")
     }
+  }
+
+  def test_roundShift() : Unit = {
+    val s1 = (1,1) +: Seq( (2,2), (3,3) )  // dodaj (1,1) na początku
+    val s2 =  Seq( (1,1), (2,2) ) :+ (3,3) // dodaj (3,3) na końcu
+    s1.foreach { case (a,b) => println(s"a = $a, b = $b") }
+    s2.foreach { case (a,b) => println(s"a = $a, b = $b") }
+  }
+
+  def main(args: Array[String]): Unit = {
+    //test_spt()
+    //test_foreach()
+    test_roundShift()
   }
 }
