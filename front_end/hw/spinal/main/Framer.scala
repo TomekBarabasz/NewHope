@@ -14,14 +14,16 @@ case class FramerWord(w: Int) extends Bundle {
 //  (periodyczne), spakowane parami: z[m] = y[2m] + j y[2m+1].
 //  Wyjscie: fftSize/2 probek zespolonych, exp = 0, last na ostatniej.
 //
-//  Przed pierwszymi fftSize probkami PO KAZDYM RESECIE ramka zawiera
-//  zera - pierwsza wychodzi po `hop` probkach i jest w wiekszosci cisza.
-//  Ring (Mem) nie ma resetu, wiec zera nie pochodza z pamieci: licznik
-//  `fill` liczy probki zapisane od resetu, a pozycje starsze sa przy
-//  odczycie podmieniane na 0. Bez tego pierwsza ramka po resecie niosla
-//  probki sprzed resetu, a zbocze resetu potrafilo dopisac jeszcze jedna
-//  (Verilator startuje `valid` zrodla losowo; patrz "Framer: ring
-//  przezywa reset"). Kasowanie ringu odpada: L cykli, a probki juz plyna.
+//  Pierwsza ramka PO KAZDYM RESECIE wychodzi dopiero, gdy od resetu
+//  zapisano wszystkie fftSize pozycji ringu - przy pierwszej
+//  wielokrotnosci `hop` >= fftSize (512/160: po 640 probkach). Siatka
+//  ramek zostaje co `hop` probek od resetu. Ring (Mem) nie ma resetu,
+//  ale stara zawartosc nigdy nie trafia do odczytu: pod resetem wrPtr
+//  stoi na 0, wiec zapis spod resetu (Verilator startuje `valid` zrodla
+//  losowo; patrz "Framer: ring przezywa reset") nadpisuje pierwsza
+//  probka, a zapisy sprzed resetu nadpisuje przejscie wrPtr przez
+//  wszystkie L adresow. Ramek z zerami nie ma: polowiczne okno daje
+//  skrajne mel_log i bezdzwieczne F0, ktore przesunelyby stan GRU.
 //
 //  Wejscie to Flow, nie Stream: probek z mikrofonu nie da sie
 //  wstrzymac. Jesli wyjscie stoi tak dlugo, ze nowa probka nadpisuje
@@ -51,11 +53,15 @@ class Framer(val g: FramerGenerics) extends Component {
   // ---- zapis ---------------------------------------------------------
   val wrPtr    = Reg(UInt(logL bits)) init 0
   val hopCnt   = Reg(UInt(log2Up(hop) bits)) init 0
-  val frameReq = io.input.valid && hopCnt === U(hop - 1)
   ring.write(wrPtr, io.input.payload, io.input.valid)
-  // probki zapisane od resetu, nasycone na L; zapis pod resetem sie nie liczy
-  val fill = Reg(UInt(logL + 1 bits)) init 0
-  when(io.input.valid && fill =/= U(L)) { fill := fill + 1 }
+  // ring zapelniony od resetu: wrPtr przeszedl przez wszystkie adresy
+  // (do pierwszego zawiniecia wrPtr sam liczy zapisy od resetu)
+  val primed   = RegInit(False)
+  val lastSlot = wrPtr === U(L - 1)
+  when(io.input.valid && lastSlot) { primed := True }
+  // probka zapisywana w tym cyklu jest L-ta, wiec ring jest pelny juz teraz
+  val ringFull = primed || lastSlot
+  val frameReq = io.input.valid && hopCnt === U(hop - 1) && ringFull
 
   when(io.input.valid) {
     wrPtr  := wrPtr + 1
@@ -66,7 +72,6 @@ class Framer(val g: FramerGenerics) extends Component {
   val reading  = RegInit(False)
   val rdBase   = Reg(UInt(logL bits)) init 0
   val rdIssued = Reg(UInt(logL + 1 bits)) init 0
-  val rdFill   = Reg(UInt(logL + 1 bits)) init 0    // ile pozycji ramki jest prawdziwych
   val overrun  = RegInit(False)
   io.overrun := overrun
 
@@ -76,12 +81,8 @@ class Framer(val g: FramerGenerics) extends Component {
   val finishing = issue && rdIssued === U(L - 1)
   val winIdx    = Mux(idx <= U(L / 2), idx, U(0, logL bits) - idx)
 
-  val ringData = ring.readSync(rdBase + idx, issue)
-  // pozycja i (0 = najstarsza) jest prawdziwa, gdy i >= L - rdFill
-  val isPad    = (rdIssued.resize(logL + 2) + rdFill.resize(logL + 2)) < U(L, logL + 2 bits)
-  val padData  = RegNext(isPad) init False          // wyrownane z latencja readSync
-  val sample   = Mux(padData, S(0, SW bits), ringData)
-  val wv     = win.readSync(winIdx.resize(log2Up(L / 2 + 1)), issue)
+  val sample   = ring.readSync(rdBase + idx, issue)
+  val wv       = win.readSync(winIdx.resize(log2Up(L / 2 + 1)), issue)
 
   when(issue)     { rdIssued := rdIssued + 1 }
   when(finishing) { reading := False }
@@ -98,8 +99,6 @@ class Framer(val g: FramerGenerics) extends Component {
       reading  := True
       rdBase   := wrPtr + 1        // najstarsza probka po tym zapisie
       rdIssued := U(0)
-      // probka z frameReq zapisuje sie w tym samym cyklu
-      rdFill   := Mux(fill === U(L), fill, fill + 1)
     }
   }
 

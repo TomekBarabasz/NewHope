@@ -11,11 +11,11 @@ import newhope.frontend.{Bfp, FftGolden}
 //   1. sklejanie rekordow z bajtow aux kolejnych ramek FeCheck (sof otwiera
 //      rekord, dlugosc z typu); przerwa w abs (ramki zgubione przy resecie)
 //      albo sof w srodku rekordu = rekord rozerwany
-//   2. golden jak sprzet: Framer po kazdym resecie podaje zera w miejsce
-//      pozycji niezapisanych od resetu (licznik fill), wiec kazdy odcinek
-//      (od flagi rst) startuje z pierscieniem zer. Ramka f odcinka ma
-//      trig = abs probki (f + 1) * hop - 1 i okno z ostatnich fftSize
-//      zapisow. Probki zgubione przy resecie (koniec odcinka przed flaga
+//   2. golden jak sprzet: Framer po kazdym resecie wydaje pierwsza ramke
+//      dopiero przy pierscieniu zapelnionym od resetu, wiec okno nie
+//      siega przed odcinek (od flagi rst). Ramki odcinka maja trig = abs
+//      probki n * hop - 1 dla n * hop >= fftSize i okno z ostatnich
+//      fftSize zapisow. Probki zgubione przy resecie (koniec odcinka przed flaga
 //      rst) robia ramke nieweryfikowalna. Potem FftGolden.rfftFrame i power.
 //   3. rekord CRC: flagi == 7, CRC i wykladnik N2, N3, N4 == golden
 //      (rozjazd nazywa pierwszy niezgodny wezel); rekord dla trig, ktorego
@@ -52,12 +52,11 @@ object FeN4Check {
     val out = scala.collection.mutable.ArrayBuffer[Gold]()
     val segs = (starts.sorted :+ (last + 1)).sliding(2).collect { case Seq(a, b) if b > a => (a, b - 1) }.toSeq
     for ((a, b) <- segs) {
-      for (i <- 0 until L) ring(i) = Some(0L)   // zera po resecie
       var wr = 0
       for (t <- 0L to (b - a)) {
         ring(wr) = ys(a + t)
         wr = (wr + 1) % L
-        if ((t + 1) % fg.hop == 0) {
+        if ((t + 1) % fg.hop == 0 && t + 1 >= L) {   // pierwsza ramka przy pelnym pierscieniu
           val win = (0 until L).map(i => ring((wr + i) % L))
           val trig = (a + t) & FeN4.TrigMask
           if (win.exists(_.isEmpty)) out += Gold(trig, false, Vector.empty, Vector.empty, Vector.empty, 0, b)

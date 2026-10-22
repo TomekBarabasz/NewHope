@@ -82,7 +82,7 @@ Rekordy wychodzą bajt na ramkę wyniku. Rekord CRC wchodzi do kolejki (256 B) w
 **Ocena (host, `FeN4Check`):**
 
 1. Sklejanie rekordów z bajtów `aux`. Przerwa w numeracji ramek (zgubione przy resecie) albo `sof` w środku rekordu oznacza rekord rozerwany.
-2. Golden jak sprzęt. Framer po każdym resecie podaje zera zamiast pozycji pierścienia niezapisanych od resetu (licznik `fill`), więc każdy odcinek (od flagi `rst`) startuje z pierścieniem zer. Ramka f odcinka ma `trig` = numer próbki `(f + 1) · hop − 1`. Nieweryfikowalna jest tylko ramka z próbką zgubioną przy resecie w oknie (koniec odcinka przed flagą `rst`). Potem `FftGolden.rfftFrame` i `power`.
+2. Golden jak sprzęt. Framer po każdym resecie wydaje pierwszą ramkę dopiero, gdy pierścień zapełni się próbkami od resetu, więc okno nigdy nie sięga przed odcinek (od flagi `rst`). Ramki odcinka mają `trig` = numer próbki `n · hop − 1` dla `n · hop ≥ fftSize` (512/160: pierwsza ramka to `trig` 639). Nieweryfikowalna jest tylko ramka z próbką zgubioną przy resecie w oknie (koniec odcinka przed flagą `rst`). Potem `FftGolden.rfftFrame` i `power`.
 3. Rekord CRC weryfikowalnej ramki: flagi = 7, a CRC i wykładnik N2, N3, N4 równe goldenowi. Komunikat nazywa pierwszy niezgodny węzeł („N4 CRC …, golden … (N3 zgodny)”), co wskazuje blok: Framer, `FftCore`/`RealUnpack` albo `PowerSpectrum`.
 4. Zrzut: `p` prążek po prążku i wykładnik równe goldenowi.
 5. Każda weryfikowalna ramka ma rekord CRC. Braki są dozwolone tylko w trzech przypadkach:
@@ -90,7 +90,7 @@ Rekordy wychodzą bajt na ramkę wyniku. Rekord CRC wchodzi do kolejki (256 B) w
    - pod koniec nagrania: rekord jeszcze w kolejce, za zrzutem;
    - przy rekordach rozerwanych przez reset: braków najwyżej tyle, ile rozerwanych rekordów.
 
-Uwaga do DUT: do commita 362b8db pierścień Framera przechodził przez reset i pierwsze 3 ramki po resecie niosły próbki sprzed niego. HIL to pokazał; od poprawki golden zakłada zera po każdym resecie. Bitstream sprzed poprawki nie przejdzie `hw_n4_reset` (pierwsze ramki odcinków niezgodne na N2).
+Uwaga do DUT: do commita 362b8db pierścień Framera przechodził przez reset i pierwsze 3 ramki po resecie niosły próbki sprzed niego. HIL to pokazał; 362b8db podmieniał pozycje niezapisane od resetu na zera (licznik `fill`). Od issue #10 Framer w ogóle nie wydaje ramek przed zapełnieniem pierścienia, a golden ich nie zakłada. Bitstream z 362b8db ma o 3 ramki więcej na odcinek i nie przejdzie oceny (rekordy dla `trig` nieznanych goldenowi); bitstream sprzed 362b8db dodatkowo pada na N2.
 
 ## ESP32: klucze `cfg`
 

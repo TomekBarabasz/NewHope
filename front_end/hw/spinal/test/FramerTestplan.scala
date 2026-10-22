@@ -26,17 +26,18 @@ object FramerPlan {
     Testpoint("framer_smoke", Stage.V1,
       "Ramki co hop probek, okno, pakowanie par",
       stimulus = Seq("L + 3 hop probek rownomiernych, potem ton"),
-      checking = Seq("kazda ramka == golden (najstarsza probka pierwsza, zera przed startem)",
+      checking = Seq("kazda ramka == golden (najstarsza probka pierwsza, pierwsza przy pierwszej wielokrotnosci hop >= L)",
                      "last na ostatniej probce ramki", "overrun == 0")),
     Testpoint("framer_overrun", Stage.V2,
       "Zatkane wyjscie zapala overrun",
-      stimulus = Seq("ready = 0 na stale, 3 hopy probek"),
+      stimulus = Seq("ready = 0 na stale, L + 3 hopy probek"),
       checking = Seq("overrun == 1 po nadpisaniu nieodczytanej probki")),
     Testpoint("framer_reset_clears", Stage.V2,
-      "Reset czysci okno ramki, choc ring (Mem) nie ma resetu",
+      "Po resecie ramka dopiero przy pelnym ringu, choc ring (Mem) nie ma resetu",
       stimulus = Seq("L + hop probek, potem reset z valid = 1 i losowym payloadem przez caly reset",
-                     "po resecie 2 hop probek"),
-      checking = Seq("ramki po resecie == golden liczony od zer (probki sprzed resetu i spod resetu niewidoczne)",
+                     "po resecie L - 1 probek, pauza na odczyt ramki, potem 2 hop probek"),
+      checking = Seq("przed L-ta probka po resecie zadnej ramki",
+                     "ramki po resecie == golden z samych probek po resecie (probki sprzed resetu i spod resetu niewidoczne)",
                      "overrun == 0"))
   ) ++ StreamConformance.testpoints("out")
 
@@ -118,12 +119,12 @@ class FramerTestplan extends TestplanSuite {
 
     scenario("framer_overrun") { (d, rng) =>
       d.io.output.ready #= false
-      feed(d, signal(rng, 3 * g.hop), cps).join()
+      feed(d, signal(rng, L + 3 * g.hop), cps).join()
       d.clockDomain.waitSampling(5)
       assert(d.io.overrun.toBoolean, "overrun nie zapalil sie przy zatkanym wyjsciu")
     }
 
-    // Bez maskowania `fill` pierwsza ramka po resecie niesie probki sprzed
+    // Gdyby ramka wyszla przed zapelnieniem ringu, nioslaby probki sprzed
     // resetu i te zapisane pod resetem. Deterministycznie na obu backendach:
     // valid = 1 pod resetem steruje testbench, nie losowy stan startowy.
     scenario("framer_reset_clears") { (d, rng) =>
@@ -149,11 +150,14 @@ class FramerTestplan extends TestplanSuite {
       cd.waitSampling(5)
       got.clear()
 
-      val after = signal(rng, 2 * g.hop)
+      val after = signal(rng, L + 2 * g.hop)
       val exp = framer(g, after).flatMap { f =>
         f.zipWithIndex.map { case (c, i) => (c, 0, i == L / 2 - 1) }
       }
-      feed(d, after, cps).join()
+      feed(d, after.take(L - 1), cps).join()
+      cd.waitSampling(4 * readoutCycles(g))
+      assert(got.isEmpty, s"ramka po resecie przed L = $L probkami")
+      feed(d, after.drop(L - 1), cps).join()
       waitFor(cd, got.size >= exp.size, 20 * L + 1000, s"${exp.size} probek po resecie")
       cd.waitSampling(10)
       expectSeq(got, exp, s"Framer $cfgName po resecie")
