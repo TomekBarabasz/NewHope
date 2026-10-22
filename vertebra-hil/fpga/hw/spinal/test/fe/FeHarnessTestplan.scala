@@ -4,8 +4,8 @@ import spinal.core._
 import spinal.core.sim._
 import scala.collection.mutable
 import scala.util.Random
-import newhope.i2s.I2sCodecModel
-import newhope.i2s.I2sEvent.Frame
+import newhope.com.i2s.I2sCodecModel
+import newhope.com.i2s.I2sEvent.Frame
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
 import newhope.vertebra.hil._

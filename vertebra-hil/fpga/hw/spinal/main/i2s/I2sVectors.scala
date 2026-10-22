@@ -3,7 +3,7 @@ package newhope.vertebra.hil.i2s
 import java.io.File
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
-import newhope.i2s.I2sFormat
+import newhope.com.i2s.I2sFormat
 import I2sPattern.{Link, U32}
 
 // =====================================================================

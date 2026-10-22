@@ -3,7 +3,7 @@ package newhope.vertebra.hil.i2s
 import spinal.core._
 import spinal.lib._
 import spinal.lib.com.uart._
-import newhope.i2s.{I2sMaster, I2sSlave}
+import newhope.com.i2s.{I2sMaster, I2sSlave}
 import newhope.vertebra.hil._
 import HilProtocol._
 

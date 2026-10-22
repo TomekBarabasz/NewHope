@@ -107,8 +107,8 @@ object FeFrame {
   // prawy slot: bajt aux nad znacznikiem
   val AuxShift       = 6
 
-  /** Nadajnik powrotny: I2sSlave ze slowem 32 bity (newhope.i2s). */
-  val txSlave = newhope.i2s.I2sSlaveGenerics(width = SlotBits)
+  /** Nadajnik powrotny: I2sSlave ze slowem 32 bity (newhope.com.i2s). */
+  val txSlave = newhope.com.i2s.I2sSlaveGenerics(width = SlotBits)
 
   val U32 : Long = 0xFFFFFFFFL
 

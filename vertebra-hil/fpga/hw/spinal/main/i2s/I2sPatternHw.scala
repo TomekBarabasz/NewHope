@@ -1,7 +1,7 @@
 package newhope.vertebra.hil.i2s
 
 import spinal.core._
-import newhope.i2s.I2sFrame
+import newhope.com.i2s.I2sFrame
 
 // =====================================================================
 //  Wzorzec i transfer w sprzecie (contract/i2s/pattern.md).

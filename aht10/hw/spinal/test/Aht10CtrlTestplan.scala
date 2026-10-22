@@ -2,7 +2,7 @@ package newhope.aht10
 
 import spinal.core._
 import spinal.core.sim._
-import newhope.i2c._
+import newhope.com.i2c._
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
 

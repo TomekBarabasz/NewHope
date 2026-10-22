@@ -2,7 +2,7 @@ package newhope.aht10
 
 import spinal.core.ClockDomain
 import spinal.core.sim._
-import newhope.i2c.{I2cBusModel, I2cPins, I2cSlaveModel}
+import newhope.com.i2c.{I2cBusModel, I2cPins, I2cSlaveModel}
 
 // =====================================================================
 //  Model czujnika AHT10 - warstwa 3 nad I2cSlaveModel.

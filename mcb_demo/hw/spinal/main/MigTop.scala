@@ -71,7 +71,7 @@ class McbDemoTopV1(
   }
   noIoPrefix()
 
-  val mcb = new s6_lpddr(simulation = simulation)
+  val mcb = new s6_lpddr(McbDemoClocks.mig(dataWidth = 32), simulation = simulation)
 
   // ---------------------------------------------------------------- piny DRAM
   mcb.io.c3_sys_clk   := io.c3_sys_clk

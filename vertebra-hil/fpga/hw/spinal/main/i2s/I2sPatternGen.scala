@@ -2,7 +2,7 @@ package newhope.vertebra.hil.i2s
 
 import spinal.core._
 import spinal.lib._
-import newhope.i2s.I2sFrame
+import newhope.com.i2s.I2sFrame
 import I2sPatternHw._
 
 // =====================================================================

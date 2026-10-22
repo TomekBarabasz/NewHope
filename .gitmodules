@@ -1,0 +1,4 @@
+[submodule "lib"]
+	path = lib
+	url = https://github.com/TomekBarabasz/fpga-hw-lib
+	branch = main

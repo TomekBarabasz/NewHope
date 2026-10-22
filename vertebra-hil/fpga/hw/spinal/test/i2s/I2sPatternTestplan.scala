@@ -8,7 +8,7 @@ import spinal.lib.sim._
 import scala.collection.mutable
 import scala.io.Source
 import scala.util.Random
-import newhope.i2s.{I2sFormat, I2sFrame}
+import newhope.com.i2s.{I2sFormat, I2sFrame}
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
 import newhope.vertebra.hil.Config
@@ -408,7 +408,7 @@ class I2sPatternTestplan extends TestplanSuite {
     // Najkrotsza ramka w harnessie: slave przy polokresie SCK > txLatency
     // (3 cykle, I2sSlaveGenerics), czyli >= 4 cykle; slot >= 8 bitow.
     val checkCycles = 5
-    val minFrame    = 2 * 8 * 2 * (newhope.i2s.I2sSlaveGenerics().txLatencyCycles + 1)
+    val minFrame    = 2 * 8 * 2 * (newhope.com.i2s.I2sSlaveGenerics().txLatencyCycles + 1)
     info(s"checker: $checkCycles cykli na ramke, najkrotsza ramka $minFrame cykli")
     assert(minFrame >= checkCycles)
   }
