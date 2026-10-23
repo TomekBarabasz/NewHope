@@ -29,17 +29,6 @@ lazy val libMimas  = libRef("mimas_v2")
 
 // ---- ustawienia projektow NewHope ----------------------------------------------
 
-/** Domyslny backend symulacji projektow NewHope: Verilator, jak przed
-  * przejsciem na fpga-hw-lib (vertebra domyslnie bierze GHDL). backendGhdl
-  * w sesji albo VERTEBRA_BACKEND z shella dalej wygrywa. */
-def verilatorDefault : Seq[Setting[_]] = Seq(
-  Test / envVars := {
-    val m = (Test / envVars).value
-    if (m.contains("VERTEBRA_BACKEND") || sys.env.get("VERTEBRA_BACKEND").exists(_.nonEmpty)) m
-    else m + ("VERTEBRA_BACKEND" -> "verilator")
-  }
-)
-
 /** Uklad katalogow modulu sprzetowego: hw/spinal/{main,test}, RTL w hw/gen. */
 def hwLayoutNh : Seq[Setting[_]] = Seq(
   Compile / scalaSource := baseDirectory.value / "hw/spinal/main",
@@ -47,7 +36,7 @@ def hwLayoutNh : Seq[Setting[_]] = Seq(
 )
 
 /** Wspolne ustawienia modulu sprzetowego. */
-def hwSettings : Seq[Setting[_]] = hwLayoutNh ++ forkSettings ++ verilatorDefault ++ Seq(
+def hwSettings : Seq[Setting[_]] = hwLayoutNh ++ forkSettings ++ Seq(
   libraryDependencies ++= spinal :+ (scalatest % Test),
   publish / skip := true,
 
@@ -114,7 +103,6 @@ lazy val hil = (project in file("vertebra-hil/host"))
     name := "vertebra-hil-host",
     srcLayout,
     forkSettings,
-    verilatorDefault,
     libraryDependencies ++= spinal ++ Seq(scalatest, jSerialComm),
     Test / parallelExecution := false,
     publish / skip := true

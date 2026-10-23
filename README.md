@@ -18,8 +18,9 @@ git config push.recurseSubmodules check
 ```
 Istniejący klon: `git submodule update --init`. Przed edycją w `lib/`: `git switch main`.
 Projekty biblioteki adresuje się z prefiksem `{lib}`: `sbt "{lib}com/test"`.
-Domyślny backend symulacji projektów NewHope to Verilator (biblioteka: GHDL);
-`backendVrl` / `backendGhdl` w sesji albo `VERTEBRA_BACKEND` zmieniają oba.
+Backend i fale jak w fpga-hw-lib i voice-changer: domyślnie GHDL i bez fal
+(`SimBackend.default`, `SimEnv.waves` w vertebrze); `backendVrl` / `backendGhdl`,
+`wavesOn` / `wavesOff` w sesji albo `VERTEBRA_BACKEND` / `VERTEBRA_WAVES` z shella.
 
 # Komendy sbt
 ## generate Verilog
