@@ -206,7 +206,7 @@ case class FeN4Tap(g : RfftGenerics) extends Component {
 
   when(io.start) {
     frames := 0; crcRecs := 0; dumps := 0; drops := 0; order := 0
-    // pierwszy zrzut: ramka nr dumpEvery (ramka 0 to prawie same zera)
+    // pierwszy zrzut: ramka nr dumpEvery (liczac od 0, jak w kontrakcie)
     recOn := False; dumpCnt := io.dumpEvery; capture := False; capDone := False; dumpRdy := False; dumpSend := False
     inCrc := False; dPos := 0; dBin := 0; dByte := 0
   }

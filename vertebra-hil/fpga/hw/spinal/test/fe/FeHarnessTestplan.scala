@@ -76,16 +76,16 @@ object FeHarnessPlan {
                      "soft reset: clkOe == 0")),
     Testpoint("fe_harness_n4_chain", Stage.V1,
       "N0 -> N4 (Framer 512/160, FftCore, RealUnpack, PowerSpectrum): rekordy CRC i zrzuty",
-      stimulus = Seq("mowa z offsetem, 2200 probek (d8_n4: numeryka 512/160 jak na plytce)", "dump_every 4"),
+      stimulus = Seq("mowa z offsetem, 2700 probek (d8_n4: numeryka 512/160 jak na plytce)", "dump_every 4"),
       checking = Seq("FeCheck czysty (N0, N1, ramka v2 z kanalem pomocniczym)",
                      "FeN4Check: kazda weryfikowalna ramka ma rekord CRC zgodny na N2, N3 i N4, poza koncowka nagrania",
-                     "wszystkie ramki weryfikowalne (Framer: zera w miejsce pozycji niezapisanych od resetu)",
+                     "wszystkie ramki weryfikowalne (Framer: pierwsza ramka przy pierscieniu zapelnionym od resetu)",
                      "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
                      "n4_frames == ramki golden, n4_aux_drop == n4_order == fr_overrun == 0")),
     Testpoint("fe_harness_n4_reset", Stage.V1,
       "Reset DUT-a w trakcie strumienia z N4",
       stimulus = Seq("2 resety po 100 cykli dut, odstep 700-828 probek, 2600 probek"),
-      checking = Seq("FeN4Check: golden z pierscieniem zer po kazdym resecie, rekordy zgodne, >= 4 zweryfikowane",
+      checking = Seq("FeN4Check: golden z oknem tylko z probek odcinka (pierwsza ramka przy pelnym pierscieniu), rekordy zgodne, >= 4 zweryfikowane",
                      "brak rekordu najwyzej dla jednej ramki na reset, rekordy rozerwane tylko przy resetach")),
     Testpoint("fe_harness_mimas", Stage.V2,
       "Wariant plytki (dzielnik 73) w symulacji",
@@ -339,11 +339,12 @@ class FeHarnessTestplan extends TestplanSuite {
     n
   }
 
-  // Framer po resecie podaje zera zamiast pozycji niezapisanych, wiec
-  // golden zna kazda ramke. Pierwszy zrzut to ramka nr dump_every = 4
-  // (trig 799) i ma zdazyc wyjsc: 799 + 1291 B + kolejka -> ok. 2150 probek.
+  // Framer po resecie wydaje ramke dopiero przy pelnym pierscieniu, wiec
+  // golden zna kazda ramke. Pierwsza ramka ma trig 639, pierwszy zrzut to
+  // ramka nr dump_every = 4 (trig 1279) i ma zdazyc wyjsc:
+  // 1279 + 1291 B + kolejka -> ok. 2630 probek.
   scenario(d8N4, "fe_harness_n4_chain") { (e, rng) =>
-    val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2200, rng)
+    val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2700, rng)
     e.load(stim)
     e.host.setup(dumpEvery = 4)
     val c = e.run(stim.size + 20)
@@ -355,8 +356,9 @@ class FeHarnessTestplan extends TestplanSuite {
     assert(c("n4_crc") >= n.crcRecs && c("n4_dump") >= n.dumps, s"$c")
   }
 
-  // Kazdy odcinek od pierscienia zer; ramki tuz przed resetem moga nie
-  // zdazyc albo miec w oknie probki zgubione przy resecie (bez golden).
+  // Kazdy odcinek od nowa: pierwsza ramka po fftSize probkach odcinka;
+  // ramki tuz przed resetem moga nie zdazyc albo miec w oknie probki
+  // zgubione przy resecie (bez golden).
   scenario(d8N4, "fe_harness_n4_reset") { (e, rng) =>
     val stim = FeStimulus.noisy(d8N4.fe.i2s.fs, 2600, rng)
     e.load(stim)

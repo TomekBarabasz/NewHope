@@ -80,14 +80,14 @@ object FeHilPlan {
       stimulus = Seq("mowa z offsetem DC, -Dsamples probek; dump_every 16"),
       checking = Seq("jak hw_fe_chain (N0, N1)",
                      "FeN4Check: rekord CRC zgodny na N2, N3 i N4 dla kazdej weryfikowalnej ramki (poza koncowka nagrania)",
-                     "wszystkie ramki weryfikowalne (Framer: zera w miejsce pozycji niezapisanych od resetu)",
+                     "wszystkie ramki weryfikowalne (Framer: pierwsza ramka przy pierscieniu zapelnionym od resetu)",
                      "zrzuty N4 zgodne z FftGolden.power prazek po prazku, co najmniej 1",
                      "n4_aux_drop == n4_order == fr_overrun == 0")),
 
     Testpoint("hw_n4_reset", Stage.V2,
       "Reset DUT-a w trakcie strumienia z N4; bitstream mimas_n4",
       stimulus = Seq("HilResetInjector: 8 resetow po 500 cykli dut co 50-78 ms (odcinki dluzsze niz pierscien)"),
-      checking = Seq("FeN4Check: golden z pierscieniem zer po kazdym resecie, rekordy zgodne",
+      checking = Seq("FeN4Check: golden z oknem tylko z probek odcinka (pierwsza ramka przy pelnym pierscieniu), rekordy zgodne",
                      "braki rekordow tylko przy resetach (rozerwane, tuz przed resetem)")),
 
     Testpoint("hw_fe_long", Stage.V3,

@@ -117,11 +117,12 @@ def unpack(zn, exp, next_shift, w=W, tw=TW):
 
 
 def framer(samples, L=512, hop=160, ww=18):
-    """Framer: lista ramek, kazda to L/2 par (y[2m], y[2m+1])."""
+    """Framer: lista ramek, kazda to L/2 par (y[2m], y[2m+1]).
+    Pierwsza ramka przy pierwszej wielokrotnosci hop >= L."""
     tab = hann_table(L, (1 << (ww - 1)) - 1); ring = [0] * L; frames = []
     for t, x in enumerate(samples):
         ring[t % L] = x
-        if (t + 1) % hop == 0:
+        if (t + 1) % hop == 0 and t + 1 >= L:   # pierwsza ramka przy pelnym ringu
             y = [round_shr(ring[(t + 1 + i) % L] * tab[i if i <= L // 2 else L - i], ww - 1) for i in range(L)]
             frames.append([(y[2 * m], y[2 * m + 1]) for m in range(L // 2)])
     return frames

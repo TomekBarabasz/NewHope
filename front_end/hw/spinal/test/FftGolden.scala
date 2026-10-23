@@ -103,7 +103,8 @@ object FftGolden {
     UnpackOut(out.toVector, exp + p, sat.count)
   }
 
-  /** Ramki Framera dla calego strumienia probek (zera przed poczatkiem). */
+  /** Ramki Framera dla calego strumienia probek: co hop probek, pierwsza
+    * przy pierwszej wielokrotnosci hop >= L (ring zapelniony od startu). */
   def framer(fg: FramerGenerics, samples: Seq[Long]): Vector[Vector[Cx]] = {
     val L   = fg.fftSize
     val tab = Bfp.hannTable(L, fg.windowScale)
@@ -111,7 +112,7 @@ object FftGolden {
     val frames = mutable.ArrayBuffer[Vector[Cx]]()
     for ((x, t) <- samples.zipWithIndex) {
       ring(t % L) = x
-      if ((t + 1) % fg.hop == 0) {
+      if ((t + 1) % fg.hop == 0 && t + 1 >= L) {   // pierwsza ramka przy pelnym ringu
         val y = (0 until L).map { i =>
           val v = ring((t + 1 + i) % L)
           Bfp.roundShr(v * tab(if (i <= L / 2) i else L - i), fg.windowWidth - 1)

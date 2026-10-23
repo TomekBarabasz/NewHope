@@ -144,8 +144,8 @@ function unpack(zn::Vector{Cx}, exp::Int, next_shift::Int; w::Int = W, tw::Int =
 end
 
 """
-Framer: ramka co `hop` probek, ostatnie L probek (zera przed startem),
-okno Hanna, pary (y[2m], y[2m+1]).
+Framer: ramka co `hop` probek, ostatnie L probek, okno Hanna, pary
+(y[2m], y[2m+1]). Pierwsza ramka przy pierwszej wielokrotnosci hop >= L.
 """
 function framer(samples::AbstractVector{<:Integer}, L::Int = 512, hop::Int = 160; ww::Int = 18)
     tab  = hann_table(L, (1 << (ww - 1)) - 1)
@@ -154,7 +154,7 @@ function framer(samples::AbstractVector{<:Integer}, L::Int = 512, hop::Int = 160
     for (t0, xs) in enumerate(samples)
         t = t0 - 1
         ring[t % L + 1] = Int(xs)
-        if (t + 1) % hop == 0
+        if (t + 1) % hop == 0 && t + 1 >= L    # pierwsza ramka przy pelnym ringu
             y = [round_shr(ring[(t + 1 + i) % L + 1] * tab[(i <= L ÷ 2 ? i : L - i) + 1], ww - 1) for i in 0:L-1]
             push!(frames, [(y[2mm+1], y[2mm+2]) for mm in 0:L÷2-1])
         end

@@ -126,7 +126,9 @@ To jeden motylek z przesunięciem `nextShift`. Po nim S i T mieszczą się w W b
 
 ### Framer
 
-`FramerGenerics(fftSize = 512, hop = 160, sampleWidth = 18, windowWidth = 18)`. Co `hop` próbek wystawia ostatnie `fftSize` próbek (najstarsza pierwsza), okienkowane periodycznym Hannem (skala 2^17 − 1) i spakowane parami. Przed pierwszymi 512 próbkami bufor zawiera zera.
+`FramerGenerics(fftSize = 512, hop = 160, sampleWidth = 18, windowWidth = 18)`. Co `hop` próbek wystawia ostatnie `fftSize` próbek (najstarsza pierwsza), okienkowane periodycznym Hannem (skala 2^17 − 1) i spakowane parami. Po każdym resecie pierwsza ramka wychodzi dopiero, gdy pierścień zapełni się próbkami od resetu: przy pierwszej wielokrotności `hop` ≥ `fftSize`, czyli po 640 próbkach (40 ms), a nie po 160. Ramek z zerami nie ma, a ramki zostają na siatce co `hop` próbek od resetu. Pierścień (`Mem`) nie ma resetu, ale nic sprzed resetu nie trafia do ramki, bo `wrPtr` startuje od 0 i do pierwszej ramki przechodzi przez wszystkie adresy. Wystarcza jeden przerzutnik `primed` i porównanie `wrPtr === L − 1`.
+
+**Zmiana widoczna na wyjściu `Rfft` (issue #10):** po resecie nie ma już trzech pierwszych ramek, w większości z zer. Zastąpiło to licznik `fill` z maską zer z 362b8db. Kontraktu numerycznego to nie dotyka („wypełnienie zerami: brak” dotyczy dopełniania FFT).
 
 `overrun` zapala się na stałe (do resetu), gdy nowa próbka nadpisuje jeszcze nieodczytaną albo nowa ramka przychodzi w trakcie czytania poprzedniej. Nowa ramka jest wtedy pomijana.
 
@@ -180,6 +182,7 @@ Według TESTING-STRATEGY (vertebra): plan w kodzie, etapy V1/V2/V3, konfiguracje
 - **Latencja rdzenia:** zgodność ze wzorem `computeLatency` z tolerancją ±4 cykle na latencję `StreamFifo`.
 - **Im X\[0\] = Im X\[M\] = 0** na wyjściu RTL.
 - **`overrun` Framera:** zapala się przy zatkanym wyjściu i nie zapala przy tempie w granicach.
+- **Framer po resecie:** żadnej ramki przed `L` próbkami, pierwsza bez próbek sprzed resetu i spod resetu (`framer_reset_clears`).
 - **Tor end-to-end** bez `overrun` przy minimalnym tempie próbek.
 
 **Progi SNR** w testach bez symulacji: SNR ≥ 6,02·(W − 4) − 3·logN dB dla rdzenia i o 3 dB mniej dla toru z rozplataniem. Zapas wobec zmierzonego minimum wynosi co najmniej 10 dB.
@@ -256,5 +259,6 @@ Pułapki, które wyszły przy pierwszej kompilacji. Każda dotyczy całego works
 | Pytanie | Zamyka | Uwagi |
 | --- | --- | --- |
 | F0: autokorelacja przez FFT jest kołowa | M1 | okno 512 i opóźnienia do 267 wymagają rfft 1024 z dopełnieniem zerami (`n512_pairs`) albo metody w dziedzinie czasu |
+| Front-end w PyTorch: STFT z `center=False`? | M1 | wtedy model nie widział niepełnych okien w treningu i opóźniona pierwsza ramka Framera (issue #10) odpowiada referencji |
 | Format energii pasma mel | moduł mel | akumulacja mantys mocy przy wspólnym wykładniku ramki, szerokość akumulatora |
 | Wybór strumieni wewnętrznych do konformancji | gdy potrzebne | `simPublic` przy kompilacji (jak `phyCmd` w I2C); przy wielu strumieniach wraca pomysł `vertebra-instrument` |

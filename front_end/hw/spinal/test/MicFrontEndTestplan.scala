@@ -49,7 +49,7 @@ object FramerRef {
     val out  = mutable.ArrayBuffer[Vector[(Long, Long)]]()
     for ((x, t) <- samples.zipWithIndex) {
       ring(t % L) = x
-      if ((t + 1) % fg.hop == 0) {
+      if ((t + 1) % fg.hop == 0 && t + 1 >= L) {
         val y = (0 until L).map { i =>
           val v = ring((t + 1 + i) % L)
           Bfp.roundShr(v * tab(if (i <= L / 2) i else L - i).toLong, fg.windowWidth - 1)
