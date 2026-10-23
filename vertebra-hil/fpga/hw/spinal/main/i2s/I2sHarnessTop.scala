@@ -37,8 +37,20 @@ case class I2sHarnessTop(v : I2sHilVariant,
   }
   noIoPrefix()
 
+  // --- sys: pin -> BUFG jawnie -------------------------------------------
+  // Pin GCLK (V10) ma jednego odbiorce: ten BUFG. DCM (CLKIN i PROGCLK),
+  // harness i POR biora zegar z sieci globalnej sys_clk. Pin zasilajacy
+  // naraz CLKIN DCM i BUFG dawal Place:1108: PAR nie mial pary IOB/BUFGMUX
+  // z szybka sciezka dla obu odbiorcow. CLKIN z BUFG jest w Spartan-6
+  // dozwolony, kosztem odrobiny jittera na wejsciu DCM.
+  val sysBufg = Bufg()
+  sysBufg.io.I := io.clk
+  val sys_clk = Bool()
+  sys_clk.addAttribute("KEEP", "TRUE")
+  sys_clk := sysBufg.io.O
+
   // --- sys: BOOT + reset po wlaczeniu ------------------------------------
-  val bootCd = ClockDomain(io.clk, config = ClockDomainConfig(resetKind = BOOT))
+  val bootCd = ClockDomain(sys_clk, config = ClockDomainConfig(resetKind = BOOT))
   val por = new ClockingArea(bootCd) {
     val cnt = Reg(UInt(4 bits)) init 0
     when(cnt =/= 15) { cnt := cnt + 1 }
@@ -47,12 +59,11 @@ case class I2sHarnessTop(v : I2sHilVariant,
 
   // --- dut: DCM_CLKGEN -> BUFG ---------------------------------------------
   val dcm = DcmClkGen(dcmM, dcmD, 1e9 / bg.clkHz)
-  dcm.io.CLKIN     := io.clk
+  dcm.io.CLKIN     := sys_clk
   dcm.io.RST       := False
   dcm.io.FREEZEDCM := False
-  dcm.io.PROGCLK   := False
-  dcm.io.PROGDATA  := False
-  dcm.io.PROGEN    := False
+  // PROGCLK = zegar sys z BUFG: DcmProgrammer w harnessie pracuje w tej domenie.
+  dcm.io.PROGCLK   := sys_clk
 
   val bufg = Bufg()
   bufg.io.I := dcm.io.CLKFX
@@ -71,7 +82,12 @@ case class I2sHarnessTop(v : I2sHilVariant,
 
   // --- harness -------------------------------------------------------------
   val h = I2sHarness(v, bg, build)
-  h.io.sysClk := io.clk
+  require(h.dcm0 == ((dcmM, dcmD)), s"M/D top ${(dcmM, dcmD)} != harness ${h.dcm0}")
+  dcm.io.PROGDATA := h.io.dcm.progData
+  dcm.io.PROGEN   := h.io.dcm.progEn
+  h.io.dcm.locked   := dcm.io.LOCKED
+  h.io.dcm.progDone := dcm.io.PROGDONE
+  h.io.sysClk := sys_clk
   h.io.sysRst := por.rst
   h.io.dutClk := dut_clk
   h.io.dutRst := dutRst.rst

@@ -23,7 +23,7 @@ object Config {
 }
 
 object McbDemoClocks {
-  /** Zegary dem MCB sprzed przejscia na fpga-hw-lib: PLL z MIG-128b-166MHz
+  /** Zegary MigTop (surowy MIG, bez McbCore) sprzed przejscia na fpga-hw-lib: PLL z MIG-128b-166MHz
     * (CLKFBOUT_MULT 20, DIVCLK_DIVIDE 3, CLKOUT2 16, CLKOUT3 8), czyli
     * pamiec 166,67 MHz, UI 41,67 MHz, kalibracja 83,3 MHz - to samo, co
     * zakladal dawny MigConfig (memClkPeriod = 6000, uiClkDivider = 4).
