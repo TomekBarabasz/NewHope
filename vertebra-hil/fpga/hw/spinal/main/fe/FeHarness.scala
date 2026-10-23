@@ -4,7 +4,7 @@ import spinal.core._
 import spinal.lib._
 import spinal.lib.com.uart._
 import newhope.frontend.{MicFrontEnd, PowerSpectrum, Rfft}
-import newhope.i2s.{I2sFrame, I2sSlave}
+import newhope.com.i2s.{I2sFrame, I2sSlave}
 import newhope.vertebra.hil._
 import HilProtocol._
 
@@ -24,7 +24,7 @@ import HilProtocol._
 //  ramek na N2 (wyjscie Framera), N3 i N4 i wysyla rekordy kanalem
 //  pomocniczym ramki powrotnej (bajt na probke).
 //
-//  Nadajnik powrotny to I2sSlave z newhope.i2s zegarowany wewnetrznym
+//  Nadajnik powrotny to I2sSlave z newhope.com.i2s zegarowany wewnetrznym
 //  SCK/WS DUT-a: ESP32 jako slave odbiera wynik na tym samym zegarze,
 //  na ktorym nadaje bodziec (full duplex jednego kontrolera).
 //

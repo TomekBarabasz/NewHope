@@ -2,7 +2,7 @@ package newhope.vertebra.hil.i2s
 
 import java.io.File
 import scala.io.Source
-import newhope.i2s.I2sFormat
+import newhope.com.i2s.I2sFormat
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import I2sPattern.Link
 

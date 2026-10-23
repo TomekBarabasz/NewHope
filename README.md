@@ -4,12 +4,30 @@ from learning-hdl/SpinalHDL directory
 docker run --rm -ti -v .:/workspace -w /workspace -v .\.spinal-sbt:/sbt ghcr.io/spinalhdl/docker:master
 ```
 
+# Biblioteka: submodule `lib` (fpga-hw-lib)
+`vertebra`, `com` (I2C i I2S, pakiety `newhope.com.i2c` / `newhope.com.i2s`),
+`front_end`, `mimas_v2` z MCB (`newhope.mcb`) i reszta toru DDSP są w
+[fpga-hw-lib](https://github.com/TomekBarabasz/fpga-hw-lib), podpiętej w `lib/`.
+Lokalnie zostają płytki i dema: `aht10`, `asyncfifo`, `sandbox`, `uart_demo`,
+`vgademo`, `mcb_demo` (McbDemoTop, MigTop, MIG 32 b), `mimas_v2` (BinToBcd,
+demo 7-seg) i `vertebra-hil`.
+```
+git clone --recurse-submodules https://github.com/TomekBarabasz/NewHope
+git config submodule.recurse true
+git config push.recurseSubmodules check
+```
+Istniejący klon: `git submodule update --init`. Przed edycją w `lib/`: `git switch main`.
+Projekty biblioteki adresuje się z prefiksem `{lib}`: `sbt "{lib}com/test"`.
+Backend i fale jak w fpga-hw-lib i voice-changer: domyślnie GHDL i bez fal
+(`SimBackend.default`, `SimEnv.waves` w vertebrze); `backendVrl` / `backendGhdl`,
+`wavesOn` / `wavesOff` w sesji albo `VERTEBRA_BACKEND` / `VERTEBRA_WAVES` z shella.
+
 # Komendy sbt
 ## generate Verilog
 w <module>/hw/spinal/main
 są pliki declarujące uruchamiane obiekty z main do uruomienia np
 `object I2cPhyTableVerilog extends App`
-każdy taki się uruchamia runMain <nazwa-packagea>.<nazwa obiekty> np `org.newhope.i2c.I2cPhyTableVerilog`
+każdy taki się uruchamia runMain <nazwa-packagea>.<nazwa obiekty> np `newhope.com.i2c.I2cMasterVerilog` (z `lib`: `{lib}com/runMain ...`)
 
 ## włączanie waves
 dużo zajmują właczamy tylko na życzenie
@@ -25,13 +43,13 @@ simClean
 
 ## pomiary
 ```
-sbt "Test/runMain newhope.i2c.FilterSweep --w 1:4 --out a.csv" &
-sbt "Test/runMain newhope.i2c.FilterSweep --w 5:8 --out b.csv" &
+sbt "{lib}com/Test/runMain newhope.com.i2c.FilterSweep --w 1:4 --out a.csv" &
+sbt "{lib}com/Test/runMain newhope.com.i2c.FilterSweep --w 5:8 --out b.csv" &
 wait
-sbt "Test/runMain newhope.i2c.FilterSweep --merge a.csv,b.csv --out filter_sweep.csv"
+sbt "{lib}com/Test/runMain newhope.com.i2c.FilterSweep --merge a.csv,b.csv --out filter_sweep.csv"
 
 albo 
-sbt "Test/runMain newhope.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
+sbt "{lib}com/Test/runMain newhope.com.i2c.FilterSweep --w 1:3 --q 2:4 --out par.csv --jobs 3"
 ```
 
 ## testy
@@ -61,11 +79,11 @@ i2c/test - uruchomienie testów dla modułu i2c
 sbt test w korzeniu odpala wszystko przez aggregate. Przy I2cPhyTestplan to 4 configi × 2 implementacje = 8 kompilacji Verilatora, plus fuzzer z 400 przebiegami. Rzadko tego chcesz.
 
 ```
-i2c/test                                          <- jeden modul
-i2c/testOnly org.newhope.i2c.I2cPhyFsmTest        <- jedna klasa
-i2c/testOnly *TableTestplan                       <- glob
-i2c/testOnly *Testplan -- -z host_smoke           <- jeden test po nazwie
-i2c/testOnly *Testplan -- -z "fast400k"           <- jeden config
+aht10/test                                        <- jeden modul
+{lib}com/testOnly newhope.com.i2c.I2cPhyFsmTestplan <- jedna klasa z biblioteki
+{lib}com/testOnly *TableTestplan                  <- glob
+{lib}com/testOnly *Testplan -- -z host_smoke      <- jeden test po nazwie
+{lib}com/testOnly *Testplan -- -z "fast400k"      <- jeden config
 ```
 ## wybieranie pojedynczych testów
 ## test suite musi być konret nie abstract np IcPhyFsm a nie I2cPhySuite

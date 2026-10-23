@@ -3,7 +3,7 @@ package newhope.aht10
 import spinal.core._
 import spinal.lib._
 import spinal.lib.fsm._
-import newhope.i2c._
+import newhope.com.i2c._
 
 // =====================================================================
 //  Parametry czasowe.

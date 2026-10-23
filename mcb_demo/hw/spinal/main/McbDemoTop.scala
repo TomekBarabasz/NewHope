@@ -31,7 +31,7 @@ import newhope.mimas_v2._
  * silnika do portu.
  */
 class McbDemoTop(
-    c            : MigConfig = MigConfig(),
+    c            : MigConfig = McbDemoClocks.mig(),
     burstLen     : Int       = 32,
     burstCount   : Int       = 1024,
     stride       : Int       = 128,
@@ -92,7 +92,7 @@ class McbDemoTop(
 
     // SevenSegMux liczy szczeliny z podanej czestotliwosci, wiec MUSI dostac
     // zegar UI, a nie domyslne 100 MHz.
-    val sevenSeg = SevenSegMux(c.uiFrequency, frameRate = 1 kHz, blankCycles = 64)
+    val sevenSeg = SevenSegMux(c.uiHertz, frameRate = 1 kHz, blankCycles = 64)
     sevenSeg.io.digits := status.io.digits
   }
 
@@ -109,8 +109,8 @@ class McbDemoTop(
 
 object McbDemoTopVerilog extends App {
 
-  val cfg32  = MigConfig(dataWidth = 32)    // Config-1, port 32 b  -> 100 MB/s
-  val cfg128 = MigConfig(dataWidth = 128)   // Config-5, port 128 b -> 400 MB/s
+  val cfg32  = McbDemoClocks.mig(dataWidth = 32)    // Config-1, port 32 b  -> 100 MB/s
+  val cfg128 = McbDemoClocks.mig(dataWidth = 128)   // Config-5, port 128 b -> 400 MB/s
 
   /**
    * Benchmarki sa tak dobrane, zeby na KAZDEJ szerokosci portu przerzucic
@@ -172,9 +172,8 @@ object McbDemoTopVerilog extends App {
     |tryb            : $mode  ->  rtl/$mode/McbDemoTop.v
     |szerokosc portu : ${cfg.dataWidth} b (${cfg.bytesPerWord} B/slowo)
     |zegar pamieci   : ${cfg.memClkHz / 1000000} MHz (okres ${cfg.memClkPeriod} ps)
-    |zegar UI        : ${cfg.uiClkHz / 1000000} MHz  <- ZALOZENIE memclk/${cfg.uiClkDivider}!
-    |                  sprawdz C3_CLKOUT2_DIVIDE w infrastructure.v
-    |                  i wyprowadzone ograniczenia w .twr
+    |zegar UI        : ${cfg.uiClkHz / 1000000} MHz (VCO / C3_CLKOUT2_DIVIDE ${cfg.clkOut2Divide})
+    |                  sprawdz wyprowadzone ograniczenia w .twr
     |sufit portu     : ${cfg.portPeakBytesPerSec / 1000000} MB/s
     |szczyt pamieci  : ${cfg.dramPeakBytesPerSec / 1000000} MB/s
     |na przebieg     : ${bytesPerPass / 1024} KiB

@@ -1,6 +1,6 @@
 package newhope.vertebra.hil.i2s
 
-import newhope.i2s.I2sFormat
+import newhope.com.i2s.I2sFormat
 
 // =====================================================================
 //  Wzorzec danych vertebra-hil dla I2S - implementacja REFERENCYJNA.

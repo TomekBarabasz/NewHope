@@ -147,7 +147,12 @@ object HilProtocol {
   * "Zrodla" to `sources`, a nie cale repo: wygenerowany Verilog i .bin
   * w hw/gen, kod hosta czy dokumentacja nie zmieniaja bitstreamu. Ta sama
   * lista sluzy hostowi do sprawdzenia, czy wgrany bitstream jest aktualny
-  * (HilIp.fpgaSources, HilGit). */
+  * (HilIp.fpgaSources, HilGit).
+  *
+  * IP z biblioteki (front_end, com/i2s) leza w submodule'u `lib`: git
+  * widzi go jako jeden wpis (wskaznik commita), wiec pathspec "lib" -
+  * kazda zmiana wskaznika albo niezacommitowana zmiana w lib/ robi
+  * plytke nieaktualna, takze gdy nie dotyczy jej IP. */
 object HilBuildInfo {
   import scala.sys.process._
 
@@ -158,7 +163,7 @@ object HilBuildInfo {
     ":(exclude)vertebra-hil/fpga/hw/gen",     // wyniki (Verilog, .bin)
     ":(exclude)vertebra-hil/fpga/hw/spinal/main/fe",
     ":(exclude)vertebra-hil/fpga/hw/fe_harness.ucf",
-    "i2s/hw/spinal/main",                     // DUT-y
+    "lib",                                    // DUT-y (I2S): submodule fpga-hw-lib
     "mimas_v2/hw/spinal/main")
 
   /** Bitstream frontendu (N0 + N1): rdzen harnessu, czesc fe, DUT z
@@ -170,8 +175,7 @@ object HilBuildInfo {
     ":(exclude)vertebra-hil/fpga/hw/gen",
     ":(exclude)vertebra-hil/fpga/hw/spinal/main/i2s",
     ":(exclude)vertebra-hil/fpga/hw/i2s_harness.ucf",
-    "front_end/hw/spinal/main",
-    "i2s/hw/spinal/main",
+    "lib",                                    // front_end i com/i2s: submodule fpga-hw-lib
     "mimas_v2/hw/spinal/main")
 
   def hashOf(srcs : Seq[String]) : Long = scala.util.Try {

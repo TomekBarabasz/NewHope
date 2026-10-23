@@ -4,6 +4,7 @@ import spinal.core._
 import spinal.core.sim._
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
+import newhope.mimas_v2.SevenSegMux
 
 // =====================================================================
 //  Testplan DisplayFormat.

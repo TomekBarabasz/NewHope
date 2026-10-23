@@ -54,7 +54,7 @@ object VgaAxisTiming {
  *               (75 KiB). Przy 115200 bd to roznica 27 s vs 7 s na obrazek.
  */
 case class VgaFbConfig(
-    mig        : MigConfig     = MigConfig(dataWidth = 128, memClkPeriod = 10000),
+    mig        : MigConfig     = VgaFbConfig.mig100ui25,
     h          : VgaAxisTiming = VgaAxisTiming.h640,
     v          : VgaAxisTiming = VgaAxisTiming.v480,
     scale      : Int           = 2,
@@ -162,4 +162,15 @@ case class VgaFbConfig(
     println(f"[vgademo] UART          : $uartBaud bd zadane, ${uartActualBaud}%.0f bd faktyczne (${uartBaudError * 100}%+.2f%%)")
     println(f"[vgademo] wgranie klatki: ${frameBytes * 10.0 / uartActualBaud}%.1f s przy 10 bitach na bajt")
   }
+}
+
+object VgaFbConfig {
+  /** Pamiec 100 MHz, UI = zegar piksela 25 MHz (VGA 640x480), kalibracja
+    * 50 MHz: PLL 100 MHz * 4 / 1, CLKOUT0 2, CLKOUT2 16, CLKOUT3 8. To samo,
+    * co zakladal dawny MigConfig(memClkPeriod = 10000, uiClkDivider = 4);
+    * w lib/mimas_v2 te liczby ida wprost do PLL w s6_lpddr.v. */
+  val mig100ui25 : MigConfig = MigConfig(
+    dataWidth    = 128,
+    clkFbOutMult = 4, divClkDivide = 1,
+    clkOut0Divide = 2, clkOut2Divide = 16, clkOut3Divide = 8)
 }

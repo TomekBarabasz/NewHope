@@ -5,7 +5,7 @@ import spinal.core.sim._
 import scala.collection.mutable
 import newhope.vertebra.{Stage, Testpoint, TestplanSuite}
 import newhope.vertebra.sim.SimBackend
-import newhpe.mimas_v2._
+import newhope.mimas_v2._
 
 // =====================================================================
 //  Testplan BinToBcd.
