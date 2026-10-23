@@ -98,10 +98,10 @@ Pliki CSV w `vectors/`, pierwszy wiersz to nagłówek, separator `,`, koniec lin
 
 Scenariusze checkera: `clean`, `prelock` (cisza, śmieci, pół ramki, cisza w trakcie potwierdzania), `gaps`, `drop`, `dup`, `swap`, `bitflip`, `bitshift` (od ramki 20 odbiorca czyta o bit za późno), `wrap` (start przy n = 2^32 − 16), `trunc` (24 → 16), `ext` (16 → 24), `slot_trunc` (32 w slocie 16), `w8_drop` (S = 3), `nolock`.
 
-Generowanie (katalog roboczy `vertebra-hil/fpga`):
+Generowanie (do `contract/i2s/vectors` w korzeniu vertebra-hil):
 
 ```
-sbt "hilFpga/runMain newhope.vertebra.hil.i2s.I2sVectors"
+sbt "hil-i2s-fpga/runMain newhope.vertebra.hil.i2s.I2sVectors"
 ```
 
 `I2sContractTestplan` (`ctr_vectors_fresh`) sprawdza, że pliki w repo są identyczne z generowanymi. Zmiana wzorca bez przegenerowania wektorów jest więc czerwona w `sbt test`.

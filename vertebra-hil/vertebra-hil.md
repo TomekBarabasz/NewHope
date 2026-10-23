@@ -77,102 +77,83 @@ Przebieg jednego testu:
 
 ### Układ repozytorium
 
-Każdy z trzech programów ma swój katalog. Czwarty katalog, `contract/`, jest wspólny dla wszystkich trzech:
+vertebra-hil dzieli się na **rdzeń** (`core/`), wspólny dla każdego IP, i **adaptery IP** (`ip/<ip>/`). Rdzeń zależy tylko od `vertebra`; adapter zależy od rdzenia i od IP z biblioteki (fpga-hw-lib). vertebra-hil nie buduje się samodzielnie: projekt (NewHope, voice-changer) dołącza `sbt/HilBuild.scala` i składa rdzeń z adapterami IP, które testuje. Adapter, którego projekt nie włączył, w ogóle się nie kompiluje, więc `ip/fe` nie wymaga `front_end` w projekcie bez frontendu.
 
-| Katalog | Co to jest | Gdzie działa | Budowanie | Wspólne / per IP |
-| --- | --- | --- | --- | --- |
-| `vertebra-hil/host/` | orkiestrator: scenariusze, `cfg`/`start`/`stat`, ocena wyniku, raport `TestplanSuite` (§8) | PC (JVM) | sbt, projekt `hil` | `HilLink`, `HilSuite` wspólne, suity `hw_*` per IP |
-| `vertebra-hil/fpga/` | harness: most UART → rejestry, generator/checker, DUT-y (§6) | Mimas V2 (bitstream) | sbt, projekt `hilFpga` → Verilog → ISE → `.bin` | rdzeń wspólny, `I2sHarness` per IP |
-| `vertebra-hil/esp32/` | firmware partnera: komendy tekstowe, wzorzec, rola I2S (§7) | ESP32-S3 | ESP-IDF (`idf.py build flash`), poza sbt | `hil_cmd` wspólny, rola per IP |
-| `vertebra-hil/contract/` | specyfikacja komend (wspólna), wzorzec i wektory testowe (CSV) per IP w podkatalogach | — | — | `commands.md` wspólny, `i2s/`, `i2c/` per IP |
+| Katalog | Co to jest | Gdzie działa | Budowanie |
+| --- | --- | --- | --- |
+| `core/host/` | orkiestrator: `HilLink`, `HilDevice`, `EspDevice`, `FpgaDevice`, `HilBench` (`trait HilIp`), `HilGit`, `HilSuite` (§8) | PC (JVM) | sbt, `hil-core-host` |
+| `core/fpga/` | rdzeń harnessu: most UART → rejestry, liczniki, capture, reset injector, `HilEchoTop`, `HilCoreTop` (§6) | Mimas V2 | sbt, `hil-core-fpga` |
+| `ip/<ip>/host/` | `HilIp` danego IP (mapa rejestrów, źródła płytek), suity `hw_*`, atrapy | PC (JVM) | sbt, `hil-<ip>-host` |
+| `ip/<ip>/fpga/` | harness IP, top-levele, `.ucf`, bitstreamy `.bin` w `hw/gen` | Mimas V2 (bitstream) | sbt, `hil-<ip>-fpga` → Verilog → ISE → `.bin` |
+| `esp32/` | firmware partnera: komendy tekstowe, wzorzec, role I2S i FE (§7) | ESP32-S3 | ESP-IDF (`idf.py build flash`), poza sbt |
+| `contract/` | specyfikacja komend (wspólna), wzorzec i wektory testowe (CSV) per IP w podkatalogach | — | — |
 
-Cała logika testów siedzi w `host/`. Firmware ESP32 i harness FPGA znają tylko zestaw komend z §5 i nic nie wiedzą o scenariuszach.
-
-**Gdzie.** `vertebra-hil/` leży w workspace NewHope obok `vertebra` i projektów IP, a nie wewnątrz `vertebra`. Są dwa powody:
-
-- Harness instancjonuje DUT-y z `i2s`, a `i2s` zależy od `vertebra`. Umieszczenie harnessu w `vertebra` dałoby cykl zależności.
-- Od `vertebra` zależy każde IP, więc nie powinna ona ciągnąć jSerialComm ani syntezowalnego mostu UART.
-
-Katalog na harness nazywa się `fpga`, a nie `hw`: nazwa `hw` jest już zajęta przez `hw/gen` i prefiks testpointów `hw_`.
+Cała logika testów siedzi w hoście. Firmware ESP32 i harness FPGA znają tylko zestaw komend z §5 i nic nie wiedzą o scenariuszach. Firmware ESP32 nie zależy od biblioteki, więc zostaje jednym projektem ESP-IDF z rolą wybieraną w menuconfig.
 
 ```
-NewHope/
-  build.sbt
-  vertebra/                         biblioteka weryfikacji, bez zmian
-  i2s/
-  vertebra-hil/
-    contract/                       commands.md: transport, ramki, wspólne rejestry (etap 1)
-      i2s/                          pattern.md, commands.md (cfg, ip_id, blok 0x100), vectors/ (etap 1)
-      fe/                           commands.md: frontend N0 + N1, ramki, load/rec (§12)
-      i2c/                          jw. dla I2C, później
-    fpga/                           sbt: hilFpga (hwSettings)
-      hw/spinal/main/               Config, HilEchoTop (etap 0); HilProtocol, HilRegBus, HilUartBridge (HilCore, HilCoreRegs), HilCoreTop (2a)...
-      hw/spinal/main/i2s/           I2sPattern, I2sCheckerModel, I2sVectors (etap 1); I2sHilRegs, I2sPatternGen/Check, I2sHarness (etap 2)
-      hw/spinal/main/fe/            FeHilRegs (FeHilVariant, FeFrame), FeHarness, FeHarnessTop (§12)
-      hw/spinal/test/fe/            FeCheck, FeStimulus, FeHarnessTestplan (§12)
-      hw/spinal/test/               HilEchoTopTestplan (etap 0)
-      hw/spinal/test/i2s/           I2sContractTestplan (etap 1), I2sHarnessTestplan
-      hw/gen/        (gitignore)    Verilog ze Spinala
-      hw/ise/                       .ucf, skrypt xtclsh / Makefile
-      hw/build/      (gitignore)    .bit / .bin
-    host/                           sbt: hil (srcLayout)
-      src/main/                     EchoProbe (etap 0); HilLink, HilDevice, EspDevice, FpgaDevice, HilBench, HilSuite (etap 4)
-      src/main/i2s/                 SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4); I2sDiag (etap 5)
-      src/test/                     HilHostTestplan, HilFakes, FakeI2sBus: host na atrapach płytek (etapy 4-5)
-      src/test/i2s/                 I2sHilTestplan (etap 4)
-      src/main/fe/, src/test/fe/    FeHil; FeHilTestplan, FakeFeBus (§12)
-    esp32/                          ESP-IDF (CMake), poza sbt
-      CMakeLists.txt, sdkconfig.defaults
-      main/                         main.c, i2s_role.c, Kconfig.projbuild (piny) (etap 3); fe_role.c (§12)
-      components/hil_cmd, hil_pattern, hil_stream (§12)
-      sdkconfig.fe                  rola FE + PSRAM (§12)
-      test/                         Makefile: hil_pattern i rdzen hil_cmd na PC, gcc (etap 3)
-      echo/                         etap 0: echo USB-Serial-JTAG, osobny projekt
-    tools/                          flashowanie Mimas V2 (XMODEM), notatki o VM z ISE
+vertebra-hil/
+  sbt/HilBuild.scala                coreFpga, coreHost, ipFpga, ipHost (dla build.sbt projektu)
+  contract/                         commands.md: transport, ramki, wspólne rejestry (etap 1)
+    i2s/                            pattern.md, commands.md (cfg, ip_id, blok 0x100), vectors/ (etap 1)
+    fe/                             commands.md: frontend N0 + N1, ramki, load/rec (§12)
+  core/
+    fpga/hw/spinal/main/            Config, HilEchoTop (etap 0); HilProtocol, HilRegBus, HilUartBridge, HilCoreTop (2a), HilRepo
+    fpga/hw/spinal/test/            HilEchoTopTestplan, HilCoreTestplan, HilSideTestplan, HilUartSim
+    host/src/main/                  EchoProbe (etap 0); HilLink, HilDevice, EspDevice, FpgaDevice, HilBench, HilSuite (etap 4)
+    host/src/test/                  HilHostTestplan, HilFakes, HilHostKit (TestIp): rdzeń hosta na atrapach
+  ip/i2s/
+    fpga/hw/spinal/main/i2s/        I2sPattern, I2sCheckerModel, I2sVectors (etap 1); I2sHilRegs, I2sPatternGen/Check, I2sHarness (etap 2)
+    fpga/hw/spinal/test/i2s/        I2sContractTestplan (etap 1), I2sHarnessTestplan, I2sPinRx
+    fpga/hw/i2s_harness.ucf, hw/gen/I2sHarnessTop_*.bin
+    host/src/main/i2s/              SigrokI2sCheck (etap 3); I2sHil: I2sFpgaMap, I2sBenchCfg (etap 4); I2sDiag (etap 5)
+    host/src/test/i2s/              I2sHilTestplan (etap 4), I2sHostTestplan, FakeI2sBus
+  ip/fe/
+    fpga/hw/spinal/main/fe/         FeHilRegs (FeHilVariant, FeFrame), FeHarness, FeHarnessTop (§12)
+    fpga/hw/spinal/test/fe/         FeCheck, FeStimulus, FeHarnessTestplan (§12)
+    fpga/hw/fe_harness.ucf, hw/gen/FeHarnessTop_*.bin
+    host/src/main/fe/, src/test/fe/ FeHil; FeHilTestplan, FeHostTestplan, FakeFeBus (§12)
+  esp32/                            ESP-IDF (CMake), poza sbt
+    CMakeLists.txt, sdkconfig.defaults, sdkconfig.fe (rola FE + PSRAM)
+    main/                           main.c, i2s_role.c, fe_role.c, Kconfig.projbuild (piny)
+    components/                     hil_cmd, hil_pattern, hil_stream
+    test/                           Makefile: komponenty na PC, gcc (etap 3)
+    echo/                           etap 0: echo USB-Serial-JTAG, osobny projekt
+  tools/                            flashowanie Mimas V2 (XMODEM), fpga_probe
 ```
 
-**Pakiety i katalogi.** Kod wspólny należy do pakietu `newhope.vertebra.hil`, a kod znający I2S do `newhope.vertebra.hil.i2s`. Katalogi nie powtarzają pakietu: pliki leżą płasko w `hw/spinal/main/` i `src/main/`, a kod I2S w podkatalogu `i2s/`. Scala tego nie wymaga, a w podprojektach z jednym pakietem pełna ścieżka `newhope/vertebra/hil/` niczego by nie mówiła. Ten sam pakiet w dwóch podprojektach sbt (`hilFpga`, `hil`) Scali nie przeszkadza.
+**Pakiety i katalogi.** Kod wspólny należy do pakietu `newhope.vertebra.hil`, a kod znający dane IP do `newhope.vertebra.hil.<ip>` (`i2s`, `fe`). Katalogi nie powtarzają pakietu: pliki rdzenia leżą płasko w `hw/spinal/main/` i `src/main/`, kod IP w podkatalogu `<ip>/`. Ten sam pakiet w kilku podprojektach sbt Scali nie przeszkadza.
 
-**Podprojekty sbt.** W `build.sbt` `hwSettings` jest złożone z części, żeby host mógł wziąć tylko te, które mają dla niego sens:
-
-| Ustawienie | Zawartość | Kto używa |
-| --- | --- | --- |
-| `srcLayout` | `src/main`, `src/test` | `vertebra`, `hil` |
-| `hwLayout` | `hw/spinal/{main,test}` | moduły sprzętowe |
-| `forkSettings` | fork testów i `run`, katalog roboczy = katalog podprojektu, `-Xmx4g`, `envVars` z `vertebraEnv` | moduły sprzętowe, `hil` |
-| `hwSettings` | `hwLayout` + `forkSettings` + zależności Spinala, `publish / skip`, `simClean` | moduły sprzętowe, `hilFpga` |
+**W build.sbt projektu** (NewHope; voice-changer analogicznie z `ip/fe`):
 
 ```scala
-lazy val hilFpga = (project in file("vertebra-hil/fpga"))
-  .dependsOn(vertebra, mimas_v2, i2s, i2c)
-  .settings(hwSettings, name := "vertebra-hil-fpga")
-
-lazy val hil = (project in file("vertebra-hil/host"))
-  .dependsOn(vertebra, hilFpga)         // I2sHilRegs: jedna mapa dla harnessu i hosta
-  .settings(
-    name := "vertebra-hil-host",
-    srcLayout,
-    forkSettings,
-    libraryDependencies ++= spinal ++ Seq(scalatest, jSerialComm),
-    Test / parallelExecution := false,  // jedno stanowisko
-    publish / skip := true
-  )
+// project/build.sbt: unmanagedSourceDirectories += <projekt>/vertebra-hil/sbt (obok lib/sbt)
+val hilDir = file("vertebra-hil")
+lazy val hilCoreFpga = HilBuild.coreFpga(hilDir, vertebra)
+lazy val hilCoreHost = HilBuild.coreHost(hilDir, hilCoreFpga)
+lazy val hilI2sFpga  = HilBuild.ipFpga(hilDir, "i2s", hilCoreFpga, com % "compile->compile;test->test")
+lazy val hilI2sHost  = HilBuild.ipHost(hilDir, "i2s", hilCoreHost, hilI2sFpga)
+lazy val hilFeFpga   = HilBuild.ipFpga(hilDir, "fe", hilCoreFpga, com % "compile->compile;test->test",
+                                       front_end % "compile->compile;test->test", hilI2sFpga % "test->test")
+lazy val hilFeHost   = HilBuild.ipHost(hilDir, "fe", hilCoreHost, hilFeFpga)
 ```
 
-Dlaczego dwa podprojekty, a nie jeden:
+Testy `ip/fe` używają odbiornika pinów I2S z `ip/i2s` (`I2sPinRx`), więc projekt z FE włącza też I2S (tylko `test->test`).
 
-- Szeregowe wykonanie jest potrzebne tylko suitom sprzętowym. Symulacje `I2sHarnessTestplan` w `hilFpga` dalej biegną równolegle.
+Dlaczego osobne podprojekty FPGA i hosta:
+
+- Szeregowe wykonanie jest potrzebne tylko suitom sprzętowym (`Test / parallelExecution := false` w hostach). Symulacje harnessu dalej biegną równolegle.
 - Host nie jest Spinalem, więc nie dostaje `hw/spinal` ani `simClean`.
 - `scalatest` jest w hoście w zakresie compile, jak w `vertebra`, bo `HilSuite` w `src/main` rozszerza `TestplanSuite`.
 
-Oba podprojekty są w `root.aggregate`. Bez stanowiska testy `hw_*` są *canceled* (§8), więc `sbt test` zostaje zielony.
+Podprojekty są w `root.aggregate` projektu. Bez stanowiska testy `hw_*` są *canceled* (§8), więc `sbt test` zostaje zielony.
 
 **Konsekwencje dla budowania.**
 
-- `Config.spinal` generuje do `hw/gen` względem katalogu roboczego. Przy forku z `forkSettings` Verilog harnessu trafia sam do `vertebra-hil/fpga/hw/gen`, a `simClean` działa bez zmian.
-- `hilFpga` ma własny `newhope.vertebra.hil.Config` w `fpga/hw/spinal/main/`, jak każdy moduł sprzętowy (`TESTING-STRATEGY.md` §2.3). `HilEchoTop` używa tego, a nie `Config` z `i2c`. Od etapu 1 `hilFpga` zależy od `i2s` (kontrakt używa `newhope.i2s.I2sFormat.transfer`), a w etapie 2 harness instancjonuje jego DUT-y; `newhope.i2s.Config` ma inny pakiet, więc nazwy się nie zderzają. Host nie ma `Config`: nie generuje Veriloga ani nie symuluje.
+- `Config.spinal` generuje do `hw/gen` względem katalogu roboczego, a fork ma katalog roboczy = katalog podprojektu, więc Verilog harnessu I2S trafia do `ip/i2s/fpga/hw/gen` (obok bitstreamów `.bin`). `simClean` czyści workspace'y symulacji, `hw/gen` zostaje.
+- **Źródła płytki** (rejestr `build`, §8): `HilBuild` liczy dla każdego `hil-<ip>-fpga` katalogi projektów sbt, z których bitstream jest zbudowany: adapter, rdzeń i zależności przechodnie w Compile (np. dla FE: `lib/front_end`, `lib/com`, `lib/core`), bez `vertebra` i bez zależności tylko testowych. Lista idzie zmienną `VERTEBRA_HIL_FPGA_SRC` do generatora (run, test) i do hosta tego samego IP, więc obie strony liczą z tych samych katalogów, w którymkolwiek repo leżą (`HilRepo`). `VERTEBRA_HIL_ROOT` wskazuje korzeń vertebra-hil (wektory kontraktu, źródła ESP32).
+- `hil-core-fpga` ma własny `newhope.vertebra.hil.Config` w `core/fpga/hw/spinal/main/`, jak każdy moduł sprzętowy (`TESTING-STRATEGY.md` §2.3); adaptery FPGA go używają. Host nie ma `Config`: nie generuje Veriloga ani nie symuluje.
 
-Do `.gitignore`: `vertebra-hil/fpga/hw/gen/`, `vertebra-hil/fpga/hw/build/`, `vertebra-hil/esp32/build/`, `vertebra-hil/esp32/sdkconfig`.
+Do `.gitignore`: `**/fpga/hw/gen/*.v`, `**/fpga/hw/gen/*.v_*.bin`, `**/fpga/build/`, `esp32/build/`, `esp32/build-*`, `esp32/sdkconfig`.
 
 ## 4. Kontrakt: wzorzec danych
 
@@ -346,7 +327,7 @@ Każda rola IP rejestruje w `hil_cmd` swoje klucze `cfg` i swoje funkcje `start`
 
 ## 8. Orkiestrator PC
 
-Orkiestrator to suita `TestplanSuite` w Scali, w podprojekcie sbt `hil` (`vertebra-hil/host`, §3). Testy sprzętowe mają plan, etapy, warianty i `unimplemented` jak w symulacji, a wynik trafia do tego samego raportu.
+Orkiestrator to suita `TestplanSuite` w Scali, w podprojektach sbt hosta (`hil-core-host` i `hil-<ip>-host`, §3). Testy sprzętowe mają plan, etapy, warianty i `unimplemented` jak w symulacji, a wynik trafia do tego samego raportu.
 
 ### Warstwy
 
@@ -394,13 +375,13 @@ Konfiguracje są jawną listą, jak w symulacji: typowe 48 kHz / 16 w 32, 44,1 k
 Uruchamianie:
 
 ```
-sbt "hil/testOnly *I2sHilTestplan"                   # cały plan
-sbt "hil/testOnly *I2sHilTestplan -- -z hw_slv"      # tylko rola slave
-sbt "hil/testOnly *I2sHilTestplan -- -z param"       # bez sprzętu
-sbt "hil/testOnly *I2sHilTestplan -- -z hw_slv -Desp_com=COM11 -Dfpga_com=COM12 -Dframes=100000"   # krótszy bieg
+sbt "hil-i2s-host/testOnly *I2sHilTestplan"                   # cały plan
+sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -z hw_slv"      # tylko rola slave
+sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -z param"       # bez sprzętu
+sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -z hw_slv -Desp_com=COM11 -Dfpga_com=COM12 -Dframes=100000"   # krótszy bieg
 ```
 
-Suity `hil` nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecution := false` w tym podprojekcie.
+Suity hosta nie mogą biec równolegle (jedno stanowisko): `Test / parallelExecution := false` w podprojektach hosta.
 
 Plan w `I2sHilTestplan` rośnie z etapami: testpoint z tabeli wyżej dochodzi w etapie, który go robi. `testplan completeness` wymaga kompletnego V1, więc wpisanie np. `hw_mst_rx_frame` przed etapem 6 zrobiłoby `sbt test` czerwonym bez stanowiska.
 
@@ -432,7 +413,7 @@ Zasady:
 
 Kontener `ghcr.io/spinalhdl/docker` służy do symulacji i generacji Veriloga. Wszystko, co dotyka sprzętu (`EchoProbe`, flashowanie Mimas V2, suity `hw_*`), działa na hoście: na Windows z natywnym JDK 17 i sbt, porty `COMx`. Kontener na Windows działa w maszynie Linuksa Docker Desktop i nie widzi portów COM. Przekazanie USB przez usbipd-win jest możliwe, ale płytki po każdym resecie pojawiają się na nowo i `--device` przestaje pasować. `hil` kompiluje się na hoście bez Verilatora i GHDL-a. Kontener i host dzielą `target/`, więc po przejściu między nimi pierwsza kompilacja jest pełna.
 
-ISE 14.7 działa w osobnej VM i dostaje tylko wygenerowany Verilog (`fpga/hw/gen`).
+ISE 14.7 działa w osobnej VM i dostaje tylko wygenerowany Verilog (`ip/<ip>/fpga/hw/gen`).
 
 ### Logic analyzer
 
@@ -444,7 +425,7 @@ Osiem etapów. W każdym dochodzi dokładnie jeden nowy element, któremu jeszcz
 
 | # | Etap | Zakres | Kryterium ukończenia |
 | --- | --- | --- | --- |
-| 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hilFpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-Serial-JTAG; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-Serial-JTAG na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
+| 0 | Narzędzia | katalogi i podprojekty sbt z §3, `Config` w `hil-core-fpga`; ISE 14.7 (VM), łańcuch Spinal → Verilog → ISE → `.bin` → flash; flashowanie Mimas V2 przez XMODEM ze skryptu i echo UART na 115200; ESP-IDF na S3 z echem po USB-Serial-JTAG; sigrok z analizatorem; sprawdzenie schematu (oscylator, VCCO banku 2) | `sbt hilFpga/compile hil/compile` przechodzi; `EchoProbe` (`sbt "hil/runMain newhope.vertebra.hil.EchoProbe"`) dostaje echo z obu płytek (`HilEchoTop` na FPGA, echo USB-Serial-JTAG na ESP32); odpowiedzi na pytania z §11 dotyczące schematu |
 | 1 | Kontrakt | `contract/commands.md` (wspólny), `contract/i2s/pattern.md` i `commands.md`; `transfer()` przeniesiony do `i2s` (`I2sFormat`); referencja w Scali: `I2sPattern`, `I2sCheckerModel`; `I2sVectors` generuje `pattern.csv`, `transfer.csv`, `checker_*.csv` | `I2sContractTestplan` zielony (w tym `ctr_vectors_fresh`), wektory w repo |
 | 2 | Harness w symulacji | `HilUartBridge`, `HilCoreRegs`, `HilCounters`, `HilCapture`, `HilResetInjector`, `I2sPatternGen`/`Check`, `I2sHarness` | `I2sHarnessTestplan` zielony, włącznie z wstrzykniętymi błędami; synteza w ISE z zapisaną zajętością i spełnionym timingiem |
 | 3 | ESP32 samo | `hil_cmd`, `hil_pattern`, `i2s_role`; `selftest` na wektorach i w pętli wewnętrznej; wyjście mastera zdekodowane w sigroku; slave sprawdzony przez drugi kontroler I2S tego samego S3 jako mastera | sigrok zgadza się z wzorcem dla 16/32, 24/32, 16/16, 32/32; slave przez 10^6 ramek bez błędu wyrównania kanałów |
@@ -488,7 +469,7 @@ Kryterium „10 min soak na każdą rolę bez błędu” jest spełnione. ESP32 
   W roli master reset DUT-a to przerwa w zegarze ESP32 slave'a, czyli kolejne sprawdzenie #9513.
 - `hw_soak` w obu rolach: full duplex przez `-Dsoak_s` sekund; bez tej opcji *canceled*, bo kryterium to 10 min na rolę:
   ```
-  sbt "hil/testOnly *I2sHilTestplan -- -z hw_soak -Desp_com=COM11 -Dfpga_com=COM12 -Dsoak_s=600"
+  sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -z hw_soak -Desp_com=COM11 -Dfpga_com=COM12 -Dsoak_s=600"
   ```
 - `hw_clock_ratio_sweep`: `unimplemented` do kroku 2 (dynamiczne M/D DCM\_CLKGEN w harnessie, nowy bitstream).
 
@@ -512,11 +493,11 @@ Kryterium „10 min soak na każdą rolę bez błędu” jest spełnione. ESP32 
 - FPGA master po `stop` dalej daje zegar (`hw_full_duplex`);
 - flaga `-dirty` liczyła się z całego repo.
 
-**Budowanie płytek pod sprawdzenie `build`.** Flaga `-dirty` (rejestr `build` FPGA, `ver` ESP32) dotyczy tylko źródeł płytki: `HilBuildInfo.sources` dla bitstreamu (ta sama lista jest w `I2sHil.fpgaSources` hosta), `esp32/` bez `test/` i `echo/` plus wektory dla firmware'u. Wcześniej liczyło się całe repo, więc wygenerowany Verilog w śledzonym `hw/gen` czy edycja kodu hosta dawały `-dirty` przy każdym buildzie. Procedura: commit zmian w źródłach płytki (gałąź dowolna), `sbt "hilFpga/runMain newhope.vertebra.hil.i2s.I2sHarnessTopVerilog"` (wszystkie warianty, w wypisie `build` bez najmłodszego bitu), ISE, `tools/programmer.py`, commit `.bin`; firmware: `idf.py build flash` (w `ver` bez `-dirty`).
+**Budowanie płytek pod sprawdzenie `build`.** Flaga `-dirty` (rejestr `build` FPGA, `ver` ESP32) dotyczy tylko źródeł płytki: `HilBuildInfo.sources` dla bitstreamu (katalogi projektów sbt bitstreamu z `HilBuild`, ta sama lista jest w `I2sHil.fpgaSources` hosta; hash to HEAD projektu, a zmiana w submodule'u `lib` albo `vertebra-hil` liczy się jak zmiana w projekcie, §3), `esp32/` bez `test/` i `echo/` plus wektory dla firmware'u. Wcześniej liczyło się całe repo, więc wygenerowany Verilog w śledzonym `hw/gen` czy edycja kodu hosta dawały `-dirty` przy każdym buildzie. Procedura: commit zmian w źródłach płytki (gałąź dowolna), `sbt "hil-i2s-fpga/runMain newhope.vertebra.hil.i2s.I2sHarnessTopVerilog"` (wszystkie warianty, w wypisie `build` bez najmłodszego bitu), ISE, `tools/programmer.py`, commit `.bin`; firmware: `idf.py build flash` (w `ver` bez `-dirty`).
 
 **Wyniki etapu 6 na płytce (2026-09-24), wariant `v16_32`.** `hw_link`, `hw_param_bounds`, `hw_slv_*` i `hw_mst_*` po 10^6 ramek: 8/8 zielonych w 1 min 26 s. `hw_mst_rx_frame` i `hw_mst_tx_frame` to pierwszy bieg ESP32 jako slave'a z obcym zegarem (FPGA z DCM, nie PLL tego samego S3): 10^6 ramek w obu kierunkach bez błędu wyrównania kanałów, więc problem z #9513 nie wystąpił w simplex 48 kHz 16/32. Zostają: V2 i pozostałe warianty (`v24_32`, `v16_16`, `v32_32`).
 
-**Wyniki etapu 5 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`, wariant `v16_32` (48 kHz, 16 w 32), ESP32 master, FPGA slave: 6/6 zielonych, `hw_la_crosscheck` odłożony.
+**Wyniki etapu 5 na płytce (2026-09-24).** `sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`, wariant `v16_32` (48 kHz, 16 w 32), ESP32 master, FPGA slave: 6/6 zielonych, `hw_la_crosscheck` odłożony.
 
 - `hw_slv_rx_frame`: ESP32 nadał 1 004 160 ramek w 20 s, checker FPGA: lock, co najmniej 10^6 zgodnych ramek, `bad = gaps = relocks = overflow = 0`.
 - `hw_slv_tx_frame`: checker ESP32 odebrał 1 000 922 ramki od DUT-a slave w 20 s, bez błędów; `sent` FPGA − `frames` ESP32 w granicy buforów DMA.
@@ -526,22 +507,22 @@ Kryterium „10 min soak na każdą rolę bez błędu” jest spełnione. ESP32 
 **Stan etapu 5 (2026-09-24).** `hw_slv_rx_frame` (ESP32 master nadaje, FPGA slave sprawdza) i `hw_slv_tx_frame` (FPGA slave nadaje, ESP32 master sprawdza, simplex) w `I2sHilTestplan`, na jednej konfiguracji: tej z `I2sBenchCfg`, która pasuje do wgranego wariantu (dla `v16_32`: 48 kHz, 16 w 32). Kolejność z §3: obie strony w `stop`, `cfg`, start odbiornika przed zegarem, a na końcu stop odbiornika przed nadawcą, żeby migawka była z ciągłego strumienia, a nie z ciszy przy wyłączaniu. Postęp liczy `stat` ESP32 w trakcie biegu (liczniki FPGA są tylko w migawce). Liczba ramek: `-Dframes` (domyślnie 10^6, ok. 21 s na test). Przy błędzie test robi `dump` z odbiornika i dekoduje go wzorcem (`I2sDiag`): „ramka 150: przekłamane bity: R xor=00000001”, „kanały zamienione”, „zgubione k ramek”, „zdublowana ramka”, „przesunięcie o bit”. `HilHostTestplan` przechodzi oba scenariusze na atrapach (`FakeI2sBus`) z czystym biegiem i z wstrzykniętymi błędami. `hw_la_crosscheck` jest w planie jako V2 `unimplemented`: brak analizatora (§11). Kryterium etapu wymaga płytek zbudowanych z czystego drzewa (etap 4) i:
 
 ```
-sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
 #   hw_slv_rx_frame: FPGA frames >= 10^6, bad = gaps = relocks = overflow = 0
 #   hw_slv_tx_frame: ESP32 frames >= 10^6, to samo; sent FPGA - frames ESP32 w [0, 4096]
 ```
 
-**Wyniki etapu 4 na płytce (2026-09-24).** `sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`: 4/4 (completeness, `hw_param_bounds`, `hw_link` esp32 i fpga), kryterium etapu spełnione. Obie płytki miały buildy `-dirty` sprzed commitów, które je opisują (ESP32 `2e88ec01-dirty`, bitstream `77ae7eb6-dirty`), stąd `allow_stale`. Przed etapem 5 obie trzeba zbudować z czystego drzewa, żeby `HilBench` przechodził bez tej opcji. Opcje `-D` suity muszą być w cudzysłowie razem z `testOnly ... --`: poza nim trafiają do JVM sbt, a nie do suity. Nieznana opcja suity (np. `-Dallow-stale`) jest błędem.
+**Wyniki etapu 4 na płytce (2026-09-24).** `sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`: 4/4 (completeness, `hw_param_bounds`, `hw_link` esp32 i fpga), kryterium etapu spełnione. Obie płytki miały buildy `-dirty` sprzed commitów, które je opisują (ESP32 `2e88ec01-dirty`, bitstream `77ae7eb6-dirty`), stąd `allow_stale`. Przed etapem 5 obie trzeba zbudować z czystego drzewa, żeby `HilBench` przechodził bez tej opcji. Opcje `-D` suity muszą być w cudzysłowie razem z `testOnly ... --`: poza nim trafiają do JVM sbt, a nie do suity. Nieznana opcja suity (np. `-Dallow-stale`) jest błędem.
 
-**Stan etapu 4 (2026-09-24).** Host jest w `host/`: `HilLink` (port, timeouty, log ruchu; porty otwiera `HilSerial`, z którego korzysta też `EchoProbe`), `EspDevice`, `FpgaDevice[R]` z kluczami `cfg` wspólnymi i z `I2sFpgaMap`, `HilBench` (porty, wersje, `HilGit`), `HilSuite` (`hwScenario`). `sbt hil/test` bez płytek: `HilHostTestplan` 7/7, `hw_param_bounds` zielony, `hw_link` (esp32, fpga) *canceled*. `hw_param_bounds` liczy: DCM\_CLKGEN 29/59 (49,1525 MHz, +0,0011 %) i 14/31 (45,1613 MHz, +0,0064 %), BCLK FPGA mastera ≤ 3,072 MHz (8 × BCLK daleko od 160 MHz), półokres SCK ESP32 dla FPGA slave'a ≥ 7,69 cykla `dut` po odjęciu okresu PLL ESP32 (wymagane > 3), wszystkie konfiguracje z `I2sBenchCfg` checkable w obu kierunkach, najmniej 7 widocznych bitów hasha (niedopasowanie 24 ↔ 16). Kryterium etapu wymaga stanowiska:
+**Stan etapu 4 (2026-09-24).** Host jest w `core/host/` (rdzeń) i `ip/i2s/host/`: `HilLink` (port, timeouty, log ruchu; porty otwiera `HilSerial`, z którego korzysta też `EchoProbe`), `EspDevice`, `FpgaDevice[R]` z kluczami `cfg` wspólnymi i z `I2sFpgaMap`, `HilBench` (porty, wersje, `HilGit`), `HilSuite` (`hwScenario`). `sbt hil/test` bez płytek: `HilHostTestplan` 7/7, `hw_param_bounds` zielony, `hw_link` (esp32, fpga) *canceled*. `hw_param_bounds` liczy: DCM\_CLKGEN 29/59 (49,1525 MHz, +0,0011 %) i 14/31 (45,1613 MHz, +0,0064 %), BCLK FPGA mastera ≤ 3,072 MHz (8 × BCLK daleko od 160 MHz), półokres SCK ESP32 dla FPGA slave'a ≥ 7,69 cykla `dut` po odjęciu okresu PLL ESP32 (wymagane > 3), wszystkie konfiguracje z `I2sBenchCfg` checkable w obu kierunkach, najmniej 7 widocznych bitów hasha (niedopasowanie 24 ↔ 16). Kryterium etapu wymaga stanowiska:
 
 ```
 # bitstream I2sHarnessTop_v16_32 i firmware z esp32/ z aktualnego drzewa
-sbt "hil/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
 #   hw_link (esp32): ver, err 1 / err 2, selftest == 702 wektory, 50 x ver bez resetu
 #   hw_link (fpga):  identyfikacja, 476 transakcji scratch bez ponowienia, statusy mostu,
 #                    porzucenie niedokończonej ramki, start/stop bez partnera
-# log ruchu: vertebra-hil/host/target/hil-logs/I2sHilTestplan/
+# log ruchu: vertebra-hil/ip/i2s/host/target/hil-logs/I2sHilTestplan/
 ```
 
 **Wyniki etapu 3 na płytce (2026-09-24).**
@@ -566,7 +547,7 @@ cfg role=master fs=48000 w=16 slot=32 seed=0x5eed1234 rx=0
 start
 #   sigrok-cli -d fx2lafw --config samplerate=24m --samples 4m -o cap.sr
 #   sigrok-cli -i cap.sr -P i2s:sck=D0:ws=D1:sd=D2 -A i2s=left:right > cap.txt
-#   sbt "hil/runMain newhope.vertebra.hil.i2s.SigrokI2sCheck cap.txt --seed 0x5eed1234 --w 16 --slot 32"
+#   sbt "hil-i2s-host/runMain newhope.vertebra.hil.i2s.SigrokI2sCheck cap.txt --seed 0x5eed1234 --w 16 --slot 32"
 stop
 # slave przez drugi kontroler: 10^6 ramek przy 48 kHz to ok. 21 s
 cfg role=slave fs=48000 w=16 slot=32 seed=0x5eed1234 rx=1 tx=1 loop=1
@@ -639,7 +620,7 @@ Otwarte pytania:
 - [x] Dlaczego `sdkconfig.defaults` był pomijany (§7): projekt echo w `esp32/echo/` nie miał własnego pliku, a `idf.py` czyta go tylko z katalogu projektu. Firmware etapu 3 ma `esp32/sdkconfig.defaults`; potwierdzić po pierwszym buildzie na płytce.
 - [ ] Jaki logic analyzer jest dostępny i czy obsłuży BCLK 6,144 MHz.
 - [x] Zajętość XC6SLX9 z oboma DUT-ami: mieści się, `v32_32` 79 % slice'ów (§10, wyniki etapu 2).
-- [x] Gdzie żyje `vertebra-hil`: w workspace NewHope, jako `vertebra-hil/` obok `vertebra`, z podprojektami sbt `hilFpga` i `hil` (§3). `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
+- [x] Gdzie żyje `vertebra-hil`: najpierw w workspace NewHope z podprojektami `hilFpga` i `hil`; od podziału na rdzeń i adaptery IP (§3) osobne repo dołączane do projektu (submodule) przez `sbt/HilBuild.scala`. `hilFpga` ma własny `Config`, jak każdy moduł sprzętowy.
 - [ ] Kandydat na partnera zapasowego, gdyby S3 slave okazał się niewiarygodny.
 
 ## 12. Frontend N0 + N1 (I2S RX z INMP441 i filtr DC)
@@ -664,7 +645,7 @@ PC --load--> ESP32 PSRAM --SD_E2F--> I2sMicRx -> DcFilter -> (y, x) -> I2sSlave 
 - **Bodziec** składa PC: `mic24 << 8 | śmieci8` w lewym slocie, `~L` w prawym. Firmware nie zna sygnałów, wgrywa go `load` do PSRAM.
 - **Wynik** wraca po I2S, a nie po UART. Strumień 16 kHz × 18 b przekracza UART 115200, a UART FPGA zajmuje most rejestrów. Nadajnik powrotny to `I2sSlave` z `newhope.i2s`, zegarowany wewnętrznym SCK/WS DUT-a, więc ESP32 odbiera na tym samym zegarze, na którym nadaje.
 - **Ramka wyniku** niesie `y`, echo `x` (próbkę N0, z której policzono `y`), `idx` mod 2^14, flagi `rst`, `bypass`, `overrun` i znacznik `0x5A5` (`FeFrame`). Golden liczony jest z `x`, a nie z bodźca, więc błąd transportu nie udaje błędu filtra. Osobno N0 sprawdza `x == L[31:14]`.
-- **Ocena:** `FeCheck` (`fpga/hw/spinal/test/fe/`) to ta sama funkcja w symulacji harnessu i na stanowisku, tak jak `I2sCheckerModel` dla I2S. Reset DUT-a dzieli strumień na odcinki od stanu zerowego, a przerwa w `idx` jest dozwolona tylko tuż przed flagą `rst`, bo reset ucina ramkę powrotną w toku.
+- **Ocena:** `FeCheck` (`ip/fe/fpga/hw/spinal/test/fe/`) to ta sama funkcja w symulacji harnessu i na stanowisku, tak jak `I2sCheckerModel` dla I2S. Reset DUT-a dzieli strumień na odcinki od stanu zerowego, a przerwa w `idx` jest dozwolona tylko tuż przed flagą `rst`, bo reset ucina ramkę powrotną w toku.
 - **Stop:** migawka liczników, potem `tail` (512) próbek ciszy, które domykają bufory DMA ESP32, i dopiero na granicy ramki SCK staje. Bez tego ESP32 gubiło ostatnie ramki, a slave zostawał z połową ramki.
 - **Piny:** SCK/WS są wyjściami od pierwszego startu do soft resetu. Bitstream FE z ESP32 w roli master I2S nie powoduje konfliktu na linii.
 
@@ -680,8 +661,8 @@ Pierwszy wpis na liście refaktorów z §10 („Potem I2C”): liczniki 0x010–
 
 ### Testy
 
-- `FeHarnessTestplan` (symulacja, `hilFpga`): rejestry, tor z bodźcem mowy, rogi (±FS co próbkę, skok, losowe słowa 32 b), okno bypassu, 3 resety DUT-a w strumieniu, stop/tail/soft reset, dymny test z prawdziwym dzielnikiem 73. ESP32 grają `I2sCodecModel` (bodziec) i `I2sPinRx` (nagranie). Wariant `d8` (dzielnik 8) skraca symulację 9×.
-- `FeHilTestplan` (stanowisko, `hil`): `hw_param_bounds`, `hw_link` (esp32, fpga), `hw_fe_chain` (V1, `fe_chain` + `dc_smoke`, domyślnie 10^5 próbek), `hw_fe_corners`, `hw_fe_removal` (+ `dc_golden_vs_float`), `hw_fe_bypass` (V2), `hw_fe_reset`, `hw_fe_long` (V3, cały bufor bodźca, `-Dlong=1`). Bez stanowiska wszystkie są *canceled*.
+- `FeHarnessTestplan` (symulacja, `hil-fe-fpga`): rejestry, tor z bodźcem mowy, rogi (±FS co próbkę, skok, losowe słowa 32 b), okno bypassu, 3 resety DUT-a w strumieniu, stop/tail/soft reset, dymny test z prawdziwym dzielnikiem 73. ESP32 grają `I2sCodecModel` (bodziec) i `I2sPinRx` (nagranie). Wariant `d8` (dzielnik 8) skraca symulację 9×.
+- `FeHilTestplan` (stanowisko, `hil-fe-host`): `hw_param_bounds`, `hw_link` (esp32, fpga), `hw_fe_chain` (V1, `fe_chain` + `dc_smoke`, domyślnie 10^5 próbek), `hw_fe_corners`, `hw_fe_removal` (+ `dc_golden_vs_float`), `hw_fe_bypass` (V2), `hw_fe_reset`, `hw_fe_long` (V3, cały bufor bodźca, `-Dlong=1`). Bez stanowiska wszystkie są *canceled*.
 - `HilHostTestplan.host_fe_on_fakes`: cała `FeHilTestplan` na atrapach (`FakeFeBus` składa nagranie z `DcGolden`), plus bieg z błędami (przekłamane `y`, złe echo `x`, zgubiona ramka) i sprawdzenie komunikatów.
 - `make -C vertebra-hil/esp32/test`: `hil_stream` (load, nadawanie, nagranie, linie `rec`, wyszukanie bodźca) i komendy roli w `hil_cmd`.
 
@@ -690,22 +671,22 @@ Zostają w symulacji: `dc_min_spacing`, `dc_overrun`, `dc_latency` (cykle, a I2S
 ### Budowanie i uruchamianie
 
 ```
-# bitstream (Verilog do hw/gen, potem ISE z hw/fe_harness.ucf, programmer.py)
-sbt "hilFpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog"
+# bitstream (Verilog do ip/fe/fpga/hw/gen, potem ISE z ip/fe/fpga/hw/fe_harness.ucf, programmer.py)
+sbt "hil-fe-fpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog"
 # firmware FE: osobny katalog i sdkconfig, build I2S zostaje nietkniety
 cd vertebra-hil/esp32
 idf.py -B build-fe -D SDKCONFIG=build-fe/sdkconfig -D SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.fe" build flash
 # testy
-sbt "hilFpga/testOnly *FeHarnessTestplan"                                   symulacja
-sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
-sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dsamples=20000 -Dlong=1"
+sbt "hil-fe-fpga/testOnly *FeHarnessTestplan"                                   symulacja
+sbt "hil-fe-host/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"
+sbt "hil-fe-host/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dsamples=20000 -Dlong=1"
 ```
 
 Okablowanie i piny są te same co dla I2S (§9). Zmiana IP to inny bitstream i inny obraz ESP32; `HilBench` odrzuca płytkę z innym `ip=` z komunikatem, co wgrać.
 
 ### Wyniki na płytce (2026-10-02)
 
-`sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`, bitstream `FeHarnessTop_mimas` (build `f950f9dc-dirty`), firmware FE `d719d9f2`. `testplan completeness` daje V1 3/3, V2 3/3 i V3 2/2; wszystkie testpointy są zielone, łącznie z `hw_fe_long`.
+`sbt "hil-fe-host/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12 -Dallow_stale=1"`, bitstream `FeHarnessTop_mimas` (build `f950f9dc-dirty`), firmware FE `d719d9f2`. `testplan completeness` daje V1 3/3, V2 3/3 i V3 2/2; wszystkie testpointy są zielone, łącznie z `hw_fe_long`.
 
 | Bieg | Bodziec | Ramki FPGA | `max \|y − float\|` | Uwagi |
 | --- | --- | --- | --- | --- |
@@ -805,9 +786,9 @@ Rekordy jadą kanałem pomocniczym ramki powrotnej: 8 b na próbkę, czyli 160 B
 ### Uruchamianie
 
 ```
-sbt "hilFpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog mimas_n4"     # Verilog -> ISE z hw/fe_harness.ucf
-sbt "hilFpga/testOnly *FeHarnessTestplan -- -z n4"                              # symulacja N4
-sbt "hil/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"           # na plytce mimas_n4: hw_fe_* + hw_n4_*
+sbt "hil-fe-fpga/runMain newhope.vertebra.hil.fe.FeHarnessTopVerilog mimas_n4"     # Verilog -> ISE z ip/fe/fpga/hw/fe_harness.ucf
+sbt "hil-fe-fpga/testOnly *FeHarnessTestplan -- -z n4"                              # symulacja N4
+sbt "hil-fe-host/testOnly *FeHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"           # na plytce mimas_n4: hw_fe_* + hw_n4_*
 ```
 
 Firmware ESP32 i okablowanie są te same co w §12.

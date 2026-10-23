@@ -12,8 +12,6 @@ inThisBuild(buildSettings)
 ThisBuild / organization := "org.newhope"
 ThisBuild / version      := "0.1.0"
 
-val jSerialComm = "com.fazecast" % "jSerialComm" % "2.11.0"
-
 // ---- biblioteki (lib/build.sbt) ------------------------------------------------
 
 lazy val hwlib = RootProject(file("lib"))
@@ -85,29 +83,25 @@ lazy val uartdemo = (project in file("uart_demo"))
   .settings(hwSettings)
 
 // ---------------------------------------------------------------------
-//  vertebra-hil: weryfikacja IP na sprzecie (vertebra-hil.md)
+//  vertebra-hil: weryfikacja IP na sprzecie (vertebra-hil/vertebra-hil.md).
+//  Rdzen + adaptery IP, ktore ten projekt testuje (vertebra-hil/sbt/HilBuild).
 // ---------------------------------------------------------------------
 
-/** Harness FPGA: Spinal -> Verilog (hw/gen) -> ISE. Zwykly modul sprzetowy,
-  * symulacje harnessu moga biec rownolegle. */
-lazy val hilFpga = (project in file("vertebra-hil/fpga"))
-  .dependsOn(vertebra, mimas_v2, com % "compile->compile;test->test",
-             front_end % "compile->compile;test->test")   // DcGolden w FeCheck
-  .settings(hwSettings, name := "vertebra-hil-fpga")
+val hilDir = file("vertebra-hil")
 
-/** Orkiestrator PC: porty szeregowe, suity hw_*. Kod nie jest sprzetem,
-  * wiec uklad katalogow jak w vertebrze. Jedno stanowisko -> testy szeregowo. */
-lazy val hil = (project in file("vertebra-hil/host"))
-  .dependsOn(vertebra, hilFpga % "compile->compile;test->test")   // test: FeCheck, FeStimulus
-  .settings(
-    name := "vertebra-hil-host",
-    srcLayout,
-    forkSettings,
-    libraryDependencies ++= spinal ++ Seq(scalatest, jSerialComm),
-    Test / parallelExecution := false,
-    publish / skip := true
-  )
+lazy val hilCoreFpga = HilBuild.coreFpga(hilDir, vertebra)
+lazy val hilCoreHost = HilBuild.coreHost(hilDir, hilCoreFpga)
+
+lazy val hilI2sFpga = HilBuild.ipFpga(hilDir, "i2s", hilCoreFpga, com % "compile->compile;test->test")
+lazy val hilI2sHost = HilBuild.ipHost(hilDir, "i2s", hilCoreHost, hilI2sFpga)
+
+// FE na NewHope jeszcze jest (stanowisko z etapow 5-6); docelowo w voice-changer.
+lazy val hilFeFpga = HilBuild.ipFpga(hilDir, "fe", hilCoreFpga,
+                                     com % "compile->compile;test->test",
+                                     front_end % "compile->compile;test->test",   // DcGolden w FeCheck
+                                     hilI2sFpga % "test->test")                  // I2sPinRx
+lazy val hilFeHost = HilBuild.ipHost(hilDir, "fe", hilCoreHost, hilFeFpga)
 
 lazy val root = (project in file("."))
-  .aggregate(asyncfifo, aht10, sandbox, hilFpga, hil)
+  .aggregate(asyncfifo, aht10, sandbox, hilCoreFpga, hilCoreHost, hilI2sFpga, hilI2sHost, hilFeFpga, hilFeHost)
   .settings(publish / skip := true)

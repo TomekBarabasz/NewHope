@@ -7,7 +7,7 @@ PC --load--> ESP32 PSRAM --SD_E2F--> I2sMicRx -> DcFilter -> (y, x) --SD_F2E--> 
                  ^ SCK/WS z I2sMicRx = I2sMaster (FPGA master, 75 MHz / 73 / 64 = 16 053 Hz) ^
 ```
 
-Kod: `FeFrame`, `FeHilRegs` i `FeHilVariant` w `fpga/hw/spinal/main/fe/FeHilRegs.scala`. Tę samą definicję czytają harness i host, a ocenę robi `FeCheck` (`fpga/hw/spinal/test/fe/`). Przy rozbieżności z tym plikiem wygrywa kod.
+Kod: `FeFrame`, `FeHilRegs` i `FeHilVariant` w `ip/fe/fpga/hw/spinal/main/fe/FeHilRegs.scala`. Tę samą definicję czytają harness i host, a ocenę robi `FeCheck` (`fpga/hw/spinal/test/fe/`). Przy rozbieżności z tym plikiem wygrywa kod.
 
 ## Identyfikator
 
