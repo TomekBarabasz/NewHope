@@ -2,3 +2,7 @@
 	path = lib
 	url = https://github.com/TomekBarabasz/fpga-hw-lib
 	branch = main
+[submodule "vertebra-hil"]
+	path = vertebra-hil
+	url = https://github.com/TomekBarabasz/vertebra-hil
+	branch = main

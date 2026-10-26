@@ -10,13 +10,20 @@ docker run --rm -ti -v .:/workspace -w /workspace -v .\.spinal-sbt:/sbt ghcr.io/
 [fpga-hw-lib](https://github.com/TomekBarabasz/fpga-hw-lib), podpiętej w `lib/`.
 Lokalnie zostają płytki i dema: `aht10`, `asyncfifo`, `sandbox`, `uart_demo`,
 `vgademo`, `mcb_demo` (McbDemoTop, MigTop, MIG 32 b), `mimas_v2` (BinToBcd,
-demo 7-seg) i `vertebra-hil`.
+demo 7-seg).
+
+`vertebra-hil/` to drugi submodule ([vertebra-hil](https://github.com/TomekBarabasz/vertebra-hil)):
+rdzeń stanowiska i adaptery IP. NewHope włącza adaptery `i2s` i `fe` (`build.sbt`,
+`HilBuild`); projekty sbt: `hil-core-fpga`, `hil-core-host`, `hil-<ip>-fpga`, `hil-<ip>-host`,
+np. `sbt "hil-i2s-host/testOnly *I2sHilTestplan -- -Desp_com=COM11 -Dfpga_com=COM12"`.
+Rejestr `build` bitstreamu to HEAD NewHope: zmiana w `lib/` albo `vertebra-hil/`
+bez commita tutaj daje `-dirty` (tylko płytkom, których źródeł dotyczy).
 ```
 git clone --recurse-submodules https://github.com/TomekBarabasz/NewHope
 git config submodule.recurse true
 git config push.recurseSubmodules check
 ```
-Istniejący klon: `git submodule update --init`. Przed edycją w `lib/`: `git switch main`.
+Istniejący klon: `git submodule update --init`. Przed edycją w `lib/` albo `vertebra-hil/`: `git switch main` w tym submodule'u.
 Projekty biblioteki adresuje się z prefiksem `{lib}`: `sbt "{lib}com/test"`.
 Backend i fale jak w fpga-hw-lib i voice-changer: domyślnie GHDL i bez fal
 (`SimBackend.default`, `SimEnv.waves` w vertebrze); `backendVrl` / `backendGhdl`,
